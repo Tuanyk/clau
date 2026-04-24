@@ -26,3 +26,24 @@ files.pythonhosted.org
 # System (cần cho apt, curl)
 deb.debian.org
 security.debian.org
+
+# Meta / Facebook / Instagram Graph API
+graph.facebook.com
+graph.instagram.com
+www.facebook.com
+
+# Google APIs (auth + OAuth)
+accounts.google.com
+oauth2.googleapis.com
+www.googleapis.com
+
+# Google Analytics (GA4 Data + Admin)
+analyticsdata.googleapis.com
+analyticsadmin.googleapis.com
+analyticsreporting.googleapis.com
+
+# Google Search Console
+searchconsole.googleapis.com
+
+# Google Tag Manager
+tagmanager.googleapis.com

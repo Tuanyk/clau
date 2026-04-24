@@ -17,4 +17,19 @@ if [ -f /etc/allowlist.txt ] && [ -n "${CLAU_FIREWALL:-}" ]; then
   sudo /usr/local/bin/init-firewall.sh /etc/allowlist.txt
 fi
 
+# Traffic log (debug mode): sniff DNS queries, append unique-ish hostnames.
+# Enabled bằng CLAU_TRAFFIC_LOG=<path>. Thường đi kèm --no-firewall để biết
+# app cần gì mà add vào allowlist sau.
+if [ -n "${CLAU_TRAFFIC_LOG:-}" ]; then
+  mkdir -p "$(dirname "$CLAU_TRAFFIC_LOG")" 2>/dev/null || true
+  : > "$CLAU_TRAFFIC_LOG" 2>/dev/null || { sudo touch "$CLAU_TRAFFIC_LOG"; sudo chown dev:dev "$CLAU_TRAFFIC_LOG"; }
+  (
+    sudo tcpdump -l -p -n -i any 'udp and port 53' 2>/dev/null \
+      | grep --line-buffered -oP ' (A|AAAA)\? \K[^ ]+' \
+      | sed -u 's/\.$//' \
+      >> "$CLAU_TRAFFIC_LOG"
+  ) &
+  echo "📝 DNS log: $CLAU_TRAFFIC_LOG  (xem: sort -u $CLAU_TRAFFIC_LOG)"
+fi
+
 exec "$@"

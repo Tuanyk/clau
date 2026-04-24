@@ -287,7 +287,11 @@ if [[ -n "$ALLOWLIST_TO_USE" && "$NO_FIREWALL" -eq 0 ]]; then
     -e CLAU_FIREWALL=1
   )
 elif [[ "$NO_FIREWALL" -eq 1 ]]; then
-  echo "⚠️  Firewall disabled (--no-firewall)"
+  echo "⚠️  Firewall disabled (--no-firewall) — DNS log: ~/.history-store/traffic.log"
+  FIREWALL_OPTS+=(
+    --cap-add=NET_RAW --cap-add=NET_ADMIN
+    -e CLAU_TRAFFIC_LOG=/home/dev/.history-store/traffic.log
+  )
 fi
 
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then

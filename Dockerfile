@@ -3,7 +3,7 @@ FROM debian:bookworm-slim
 # Tools cơ bản + firewall + git tools + python
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates gnupg git sudo bash \
-    iptables ipset bubblewrap dnsutils \
+    iptables ipset bubblewrap dnsutils tcpdump \
     fzf \
     python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
@@ -95,7 +95,8 @@ RUN pip install --break-system-packages --no-cache-dir \
         markdown \
         fastapi \
         uvicorn[standard] \
-        python-multipart 
+        python-multipart \
+        google-analytics-data
 
 
 USER dev
