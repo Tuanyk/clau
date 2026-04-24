@@ -3,7 +3,7 @@ FROM debian:bookworm-slim
 # Tools cơ bản + firewall + git tools + python
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates gnupg git sudo bash \
-    iptables ipset dnsutils \
+    iptables ipset bubblewrap dnsutils \
     fzf \
     python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
@@ -49,7 +49,7 @@ ENV PATH="/opt/clau-tools/bin:/home/dev/.pip-user/bin:/home/dev/.local/bin:${PAT
 
 # OpenAI Codex CLI. Auth is persisted separately via the codex-auth Docker volume.
 USER root
-RUN npm install -g @openai/codex
+RUN npm install -g @openai/codex@latest
 
 # ─── Pip toolbelt (baked into image) ────────────────────────
 # Installed system-wide (/usr/local/lib/python3.*/dist-packages) so the

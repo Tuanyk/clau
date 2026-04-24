@@ -21,6 +21,18 @@ clau --codex --yolo # open Codex with --dangerously-bypass-approvals-and-sandbox
 clau --no-firewall  # debug mode
 ```
 
+By default, `clau` maps the first free host port starting at `13000` to port
+`3000` inside the container. Next.js can still listen on `3000`; open the host
+port printed by `clau`, for example `http://localhost:13000`.
+
+```bash
+CLAU_PORTS=auto:3000 clau          # first free host port from 13000 -> container 3000
+CLAU_PORTS=3001:3000 clau          # fixed host localhost:3001 -> container 3000
+CLAU_PORTS=auto:3000,auto:5173 clau
+CLAU_DEFAULT_HOST_PORT=14000 clau  # change the auto-search starting point
+CLAU_PORTS="" clau                 # no forwarded ports
+```
+
 `clau` prints the resolved project name + path on startup:
 
 ```
@@ -43,6 +55,11 @@ codex-auth  -> /home/dev/.codex
 ```
 
 This keeps OAuth/session credentials inside Docker volumes instead of using your host API keys. The launcher intentionally blanks `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` for the container, even if they exist on the host or in an env file, so Claude/Codex do not inherit long-lived API keys.
+
+Codex models can differ by auth mode and rollout. `gpt-5.5` is available in
+Codex only when it appears for the signed-in ChatGPT account; API-key auth
+does not expose it. If it does not appear yet, use `gpt-5.4` and rebuild later
+with `./install.sh` to pick up the newest Codex CLI.
 
 ## Secrets / API keys / credentials
 
