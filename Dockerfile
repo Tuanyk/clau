@@ -41,6 +41,58 @@ ENV PATH="/opt/clau-tools/bin:/home/dev/.pip-user/bin:/home/dev/.local/bin:${PAT
 # OpenAI Codex CLI. Auth is persisted separately via the codex-auth Docker volume.
 USER root
 RUN npm install -g @openai/codex
+
+# ─── Pip toolbelt (baked into image) ────────────────────────
+# Installed system-wide (/usr/local/lib/python3.*/dist-packages) so the
+# clau-pip volume at /home/dev/.pip-user/ doesn't shadow them.
+#
+# Two RUN layers so edits to the FAST list don't re-download HEAVY deps:
+#   HEAVY = big/slow (numpy, pandas, ...). Edit rarely.
+#   FAST  = small/quick tools. Edit freely — rebuild is cached.
+#
+# To add a package: add a new line with a trailing backslash. Keep the
+#                   LAST line in each block WITHOUT a trailing backslash.
+# To remove:        delete its line (and add a backslash to the new last
+#                   line if needed).
+# Then: ./install.sh   (credentials + volumes survive the rebuild)
+
+# HEAVY — edit rarely
+RUN pip install --break-system-packages --no-cache-dir \
+        numpy \
+        pandas
+
+# FAST — edit often
+RUN pip install --break-system-packages --no-cache-dir \
+        httpx \
+        requests \
+        python-dotenv \
+        pydantic \
+        ruff \
+        mypy \
+        pytest \
+        bs4 \
+        google-auth \
+        google-auth-oauthlib \
+        google-api-python-client \
+        pyyaml \
+        python-dateutil \
+        lxml \
+        html5lib \
+        jinja2 \
+        tenacity \
+        tqdm \
+        sqlalchemy \
+        openpyxl \
+        matplotlib \
+        pyarrow \
+        aiohttp \
+        pypdf \
+        markdown \
+        fastapi \
+        uvicorn[standard] \
+        python-multipart 
+
+
 USER dev
 
 # Git config cho delta
