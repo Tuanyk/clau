@@ -13,6 +13,7 @@ SETTINGS_FILE="$CONFIG_DIR/claude-settings.json"
 HOOKS_DIR="$CONFIG_DIR/hooks"
 SECRETS_DIR="$CONFIG_DIR/secrets"
 ALLOWLISTS_DIR="$CONFIG_DIR/allowlists"
+TEMPLATES_DIR="$CONFIG_DIR/templates"
 DEFAULT_ALLOWLIST="$CONFIG_DIR/allowlist.txt"
 
 # ─── Parse flags ────────────────────────────────────────────
@@ -32,6 +33,28 @@ PROJECT_DIR="$(pwd)"
 PROJECT_NAME="$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
 CONTAINER_NAME="clau-$PROJECT_NAME"
 HISTORY_VOLUME="clau-history-$PROJECT_NAME"
+
+# ─── Seed CLAUDE.md / AGENTS.md ─────────────────────────────
+# Dùng marker <!-- clau:seed-vN --> để phát hiện "đã seed":
+#   - File chưa có      → copy nguyên template
+#   - File có + marker  → skip
+#   - File có, ko marker → append template (giữ nội dung user)
+# Tắt hoàn toàn bằng: export CLAU_SKIP_AUTO_DOCS=1
+SEED_MARKER='clau:seed-v1'
+if [[ "${CLAU_SKIP_AUTO_DOCS:-0}" != "1" ]]; then
+  for doc in CLAUDE.md AGENTS.md; do
+    tpl="$TEMPLATES_DIR/$doc"
+    dst="$PROJECT_DIR/$doc"
+    [[ -f "$tpl" ]] || continue
+    if [[ ! -e "$dst" ]]; then
+      cp "$tpl" "$dst"
+      echo "📝 Seeded $doc (new file; set CLAU_SKIP_AUTO_DOCS=1 to disable)"
+    elif ! grep -qF "$SEED_MARKER" "$dst" 2>/dev/null; then
+      { printf '\n'; cat "$tpl"; } >> "$dst"
+      echo "📝 Appended clau section to existing $doc"
+    fi
+  done
+fi
 
 # ─── Check image & auth ─────────────────────────────────────
 if ! docker image inspect "$IMAGE" &>/dev/null; then

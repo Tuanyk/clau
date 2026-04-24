@@ -65,21 +65,35 @@ GOOGLE_APPLICATION_CREDENTIALS=/home/me/work/my-app/.secrets/gcp.json
 
 Then put the JSON inside your project at `.secrets/gcp.json` (gitignored) — it's available at the same path inside the container.
 
-## Telling the AI to USE a secret without reading its value
+## Auto-seeded AI instructions (`CLAUDE.md` / `AGENTS.md`)
 
-The AI should reference the variable **by name** in code, never `cat` / `printenv` / `echo $VAR` to inspect the value. Add this to your project's `CLAUDE.md`:
+On every `clau` run, the project root's `CLAUDE.md` (Claude Code) and `AGENTS.md` (Codex) are checked for a `clau:seed-v1` marker:
+
+| Project state | What clau does |
+|---|---|
+| File missing | Copy the full template into the project |
+| File exists, marker present | Skip (already seeded) |
+| File exists, no marker | Append the template content to the end |
+
+The appended section tells the AI:
+
+- Reference secrets **by name** in code, never print/log/cat their values.
+- The container is firewalled — domains not in `allowlist.txt` will fail.
+- pip and `/opt/clau-tools/bin` persist across sessions.
+
+To customize, edit `templates/CLAUDE.md` and `templates/AGENTS.md` in the clau install dir (affects future projects) or the file inside the project (that project only). **Keep the `<!-- clau:seed-v1 -->` marker comment** — deleting it will cause clau to append the section again on the next run. To disable seeding entirely, `export CLAU_SKIP_AUTO_DOCS=1`.
+
+You'll usually want to add a per-project **Secrets** section that names the env vars available. For example:
 
 ```markdown
 ## Secrets
-
-The following env vars are available inside the container. Use them by name in code (e.g. `os.environ["APP_OPENAI_API_KEY"]`). DO NOT print, log, echo, or cat them — treat the values as opaque.
 
 - `APP_OPENAI_API_KEY` — app-scoped OpenAI API key
 - `DATABASE_URL` — Postgres connection string
 - `GOOGLE_APPLICATION_CREDENTIALS` — path to GCP service account JSON
 ```
 
-That tells Claude (1) what's available, (2) the exact variable names to use, and (3) not to leak the values into the chat or logs.
+That tells the AI (1) what's available, (2) the exact variable names to use, and (3) not to leak the values into the chat or logs.
 
 ## Python packages persist
 
