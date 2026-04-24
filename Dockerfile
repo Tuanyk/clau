@@ -1,10 +1,11 @@
 FROM debian:bookworm-slim
 
-# Tools cơ bản + firewall + git tools
+# Tools cơ bản + firewall + git tools + python
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates git sudo bash \
     iptables ipset dnsutils \
     fzf \
+    python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI (gh)
@@ -33,18 +34,23 @@ RUN groupadd --gid $USER_GID dev 2>/dev/null || true \
 USER dev
 WORKDIR /home/dev
 RUN curl -fsSL https://claude.ai/install.sh | bash
-ENV PATH="/home/dev/.local/bin:${PATH}"
+RUN mkdir -p /home/dev/.pip-user/bin
+ENV PATH="/opt/clau-tools/bin:/home/dev/.pip-user/bin:/home/dev/.local/bin:${PATH}"
 
 # Git config cho delta
 RUN git config --global core.pager "delta" \
     && git config --global interactive.diffFilter "delta --color-only" \
     && git config --global delta.navigate true
 
-# Scripts
+# Scripts + clau-internal dirs
 USER root
 COPY --chown=dev:dev entrypoint.sh /entrypoint.sh
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
-RUN chmod +x /entrypoint.sh /usr/local/bin/init-firewall.sh
+RUN chmod +x /entrypoint.sh /usr/local/bin/init-firewall.sh \
+    && mkdir -p /etc/clau/hooks /var/log/clau /opt/clau-tools/bin \
+    && chown -R dev:dev /opt/clau-tools \
+    && chmod 755 /etc/clau /etc/clau/hooks \
+    && chmod 1777 /var/log/clau
 
 USER dev
 WORKDIR /workspace

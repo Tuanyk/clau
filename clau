@@ -6,6 +6,10 @@ SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_S
 CONFIG_DIR="$(dirname "$SCRIPT_PATH")"
 IMAGE="claude-base"
 AUTH_VOLUME="claude-auth"
+PIP_VOLUME="clau-pip"
+TOOLS_VOLUME="clau-tools"
+SETTINGS_FILE="$CONFIG_DIR/claude-settings.json"
+HOOKS_DIR="$CONFIG_DIR/hooks"
 SECRETS_DIR="$CONFIG_DIR/secrets"
 ALLOWLISTS_DIR="$CONFIG_DIR/allowlists"
 DEFAULT_ALLOWLIST="$CONFIG_DIR/allowlist.txt"
@@ -37,6 +41,12 @@ fi
 # ─── Tạo history volume (per-project) ───────────────────────
 docker volume inspect "$HISTORY_VOLUME" &>/dev/null || docker volume create "$HISTORY_VOLUME" >/dev/null
 
+# ─── Tạo pip volume (dùng chung mọi project) ────────────────
+docker volume inspect "$PIP_VOLUME" &>/dev/null || docker volume create "$PIP_VOLUME" >/dev/null
+
+# ─── Tạo tools volume (dùng chung mọi project) ──────────────
+docker volume inspect "$TOOLS_VOLUME" &>/dev/null || docker volume create "$TOOLS_VOLUME" >/dev/null
+
 # ─── Chọn allowlist ─────────────────────────────────────────
 PROJECT_ALLOWLIST="$ALLOWLISTS_DIR/$PROJECT_NAME.txt"
 ALLOWLIST_TO_USE=""
@@ -57,7 +67,13 @@ MOUNTS=(
   -v "$PROJECT_DIR:/workspace"
   -v "$AUTH_VOLUME:/home/dev/.claude"
   -v "$HISTORY_VOLUME:/home/dev/.history-store"
+  -v "$PIP_VOLUME:/home/dev/.pip-user"
+  -v "$TOOLS_VOLUME:/opt/clau-tools"
 )
+
+# Settings + hook (read-only) — overrides anything in the auth volume
+[[ -f "$SETTINGS_FILE" ]] && MOUNTS+=(-v "$SETTINGS_FILE:/home/dev/.claude/settings.json:ro")
+[[ -d "$HOOKS_DIR" ]] && MOUNTS+=(-v "$HOOKS_DIR:/etc/clau/hooks:ro")
 
 # Mount allowlist nếu có và firewall không bị disable
 FIREWALL_OPTS=()
@@ -103,6 +119,9 @@ exec docker run -it --rm \
   --name "$CONTAINER_NAME" \
   --hostname "$PROJECT_NAME" \
   -e ANTHROPIC_API_KEY= \
+  -e PIP_USER=1 \
+  -e PIP_BREAK_SYSTEM_PACKAGES=1 \
+  -e PYTHONUSERBASE=/home/dev/.pip-user \
   "${FIREWALL_OPTS[@]}" \
   "${ENV_FILES[@]}" \
   "${MOUNTS[@]}" \
