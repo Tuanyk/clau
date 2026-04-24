@@ -21,6 +21,20 @@ clau --codex --yolo # open Codex with --dangerously-bypass-approvals-and-sandbox
 clau --no-firewall  # debug mode
 ```
 
+`clau` prints the resolved project name + path on startup:
+
+```
+📁 Project: my-app  (/home/you/work/my-app)
+```
+
+The project name is the lowercased basename of the cwd — so `~/work/my-app` and `~/personal/my-app` share `secrets/`, `allowlists/`, container, and history. To disambiguate, override with `CLAU_PROJECT_NAME`:
+
+```bash
+cd ~/personal/my-app && CLAU_PROJECT_NAME=my-app-personal clau
+```
+
+Then `secrets/my-app-personal/`, `allowlists/my-app-personal.txt`, container `clau-my-app-personal`, etc.
+
 Claude and Codex credentials are intentionally separate:
 
 ```text
@@ -32,38 +46,59 @@ This keeps OAuth/session credentials inside Docker volumes instead of using your
 
 ## Secrets / API keys / credentials
 
-Two ways to inject env vars into the container. Both are loaded with `--env-file`, so the AI sees them as normal environment variables.
+### Recommended layout: one directory per project
 
-### 1. Per-project secrets (recommended for keys you don't want in the project repo)
-
-Drop a `.env` file at `secrets/<project-name>.env` inside the clau install dir. `<project-name>` is the lowercased basename of your project directory. Example:
-
-```bash
-# project at ~/work/my-app  →  project-name = "my-app"
-cat > /path/to/clau/secrets/my-app.env <<EOF
-APP_OPENAI_API_KEY=sk-...
-DATABASE_URL=postgres://...
-EOF
+```text
+secrets/
+  my-app/
+    .env          # API keys, connection strings — key=value
+    gcp.json      # service account JSON
+    id_ed25519    # SSH key
+    kubeconfig    # K8s config
 ```
 
-This directory is gitignored (see `.gitignore`).
+`<project-name>` is the lowercased basename of your project dir (`~/work/my-app` → `my-app`). The `secrets/` root is gitignored.
 
-### 2. Project `.env` (loaded if present in the project root)
+On every `clau` run, for project `my-app`:
 
-If your project already has a `.env`, clau auto-mounts it. Make sure it's gitignored in the project itself.
+1. `secrets/my-app/.env` is loaded into the container as env vars (`APP_API_KEY=sk-...` etc.).
+2. `secrets/my-app/` is mounted read-only at `/run/clau-secrets/` in the container.
+3. **Every file in that dir (except `.env`) gets its path auto-injected as an env var** — uppercase, non-alphanumerics become `_`:
 
-Both files are loaded if both exist; project `.env` wins on conflicting keys.
+   | File in `secrets/my-app/` | Auto-injected env var |
+   |---|---|
+   | `gcp.json` | `GCP_JSON=/run/clau-secrets/gcp.json` **and** `GOOGLE_APPLICATION_CREDENTIALS=/run/clau-secrets/gcp.json` |
+   | `kubeconfig` | `KUBECONFIG=/run/clau-secrets/kubeconfig` |
+   | `id_ed25519` | `ID_ED25519=/run/clau-secrets/id_ed25519` |
+   | `api-key.txt` | `API_KEY_TXT=/run/clau-secrets/api-key.txt` |
 
-### Credential files (not just env vars)
+   Well-known filenames (`gcp.json`, `service-account.json`, `gcp-*.json`, `*-gcp.json`, `kubeconfig*`) also set the SDK-expected name so `google.cloud.*` and `kubectl` work out of the box without touching `.env`. You can always override by setting the same variable in your own `.env`.
 
-For things like `gcloud` credentials JSON or SSH keys, mount them as files. Easiest path: keep them inside the project at a gitignored path and reference them by path from a `.env`. The project is mounted at the same absolute path inside the container as on the host, so use the host path:
-
-```env
-# if your project is at /home/me/work/my-app
-GOOGLE_APPLICATION_CREDENTIALS=/home/me/work/my-app/.secrets/gcp.json
+On entry you'll see a line like:
+```
+🔑 File secrets: .../secrets/my-app → /run/clau-secrets (ro)
+   Injected env vars: GCP_JSON GOOGLE_APPLICATION_CREDENTIALS KUBECONFIG
 ```
 
-Then put the JSON inside your project at `.secrets/gcp.json` (gitignored) — it's available at the same path inside the container.
+### Legacy layout (still supported)
+
+Earlier clau versions used two separate paths — they both still work and are loaded in addition to the directory layout:
+
+- `secrets/<project-name>.env` — env vars only (flat file)
+- `<project>/.env` — the project's own `.env` in its root (auto-mounted)
+
+If multiple are present, load order is: `secrets/<project>.env` → `secrets/<project>/.env` → `<project>/.env` → `-e` injected vars. Later values win on conflicts, so the project's own `.env` has the final say.
+
+### What the AI can do with credential files
+
+- ✅ reference them **by env-var name** in code — `os.environ["GOOGLE_APPLICATION_CREDENTIALS"]`, `process.env.KUBECONFIG`, etc. SDKs open the file.
+- ❌ `cat /run/clau-secrets/...` or `Read(/run/clau-secrets/**)` — blocked by `permissions.deny` + `hooks/secrets-guard.py`.
+
+Treat the values as opaque; the path/name is the only thing the AI should touch.
+
+### Alternative: credentials inside the project
+
+If you'd rather keep credentials inside the project (at a gitignored path like `.secrets/gcp.json`) than in clau's `secrets/`, that works too — the project is mounted at the same absolute path inside the container as on the host. Set `GOOGLE_APPLICATION_CREDENTIALS=/home/me/work/my-app/.secrets/gcp.json` in the project `.env`. Useful when credentials are shared with host tooling that also reads from the same spot.
 
 ## Auto-seeded AI instructions (`CLAUDE.md` / `AGENTS.md`)
 

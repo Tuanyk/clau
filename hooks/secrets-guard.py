@@ -20,6 +20,7 @@ LOG_PATH = "/var/log/clau/secrets-guard.log"
 BLOCKED_READ_PREFIXES = (
     "/root/",
     "/run/secrets/",
+    "/run/clau-secrets/",
     "/proc/",
     "/etc/clau/",
 )
@@ -32,6 +33,7 @@ BASH_RULES = [
     (r"(^|[\s;&|])export([\s;&|]|$)", "bare `export` dumps exported variables"),
     (r"\bcat\s+(\S*\s+)*/root/", "reading /root/ is forbidden"),
     (r"\bcat\s+(\S*\s+)*/run/secrets/", "reading /run/secrets/ is forbidden"),
+    (r"\bcat\s+(\S*\s+)*/run/clau-secrets/", "reading /run/clau-secrets/ is forbidden — reference credential files by path; SDKs open them internally"),
     (r"\bcat\s+(\S*\s+)*/proc/\d+/environ", "reading process env is forbidden"),
     (r"\bcat\s+(\S*\s+)*/etc/clau/", "reading /etc/clau/ is forbidden"),
     (r"\bcat\s+\S*\.pem\b", "reading .pem files is forbidden"),

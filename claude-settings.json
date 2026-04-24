@@ -3,6 +3,7 @@
     "deny": [
       "Read(/root/**)",
       "Read(/run/secrets/**)",
+      "Read(/run/clau-secrets/**)",
       "Read(/proc/*/environ)",
       "Read(/etc/clau/**)",
       "Bash(printenv)",
@@ -15,6 +16,7 @@
       "Bash(export)",
       "Bash(cat:/root/**)",
       "Bash(cat:/run/secrets/**)",
+      "Bash(cat:/run/clau-secrets/**)",
       "Bash(cat:/proc/*/environ)",
       "Bash(cat:/etc/clau/**)"
     ]

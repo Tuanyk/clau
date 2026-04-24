@@ -29,10 +29,18 @@ for arg in "$@"; do
 done
 
 # ─── Xác định dự án ─────────────────────────────────────────
+# Mặc định PROJECT_NAME lấy từ basename. Hai dự án cùng basename
+# ("~/work/my-app" và "~/other/my-app") sẽ collide secrets/allowlist/
+# container-name. Override bằng: CLAU_PROJECT_NAME=... clau
 PROJECT_DIR="$(pwd)"
-PROJECT_NAME="$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+if [[ -n "${CLAU_PROJECT_NAME:-}" ]]; then
+  PROJECT_NAME="$(printf '%s' "$CLAU_PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+else
+  PROJECT_NAME="$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+fi
 CONTAINER_NAME="clau-$PROJECT_NAME"
 HISTORY_VOLUME="clau-history-$PROJECT_NAME"
+echo "📁 Project: $PROJECT_NAME  ($PROJECT_DIR)"
 
 # ─── Seed CLAUDE.md / AGENTS.md ─────────────────────────────
 # Dùng marker <!-- clau:seed-vN --> để phát hiện "đã seed":
@@ -86,9 +94,14 @@ elif [[ -f "$DEFAULT_ALLOWLIST" ]]; then
 fi
 
 # ─── Env files ──────────────────────────────────────────────
+# Hỗ trợ hai layout:
+#   secrets/<project>.env          (legacy, chỉ env vars)
+#   secrets/<project>/             (đầy đủ: .env + credential files)
 ENV_FILES=()
+PROJECT_FILE_SECRETS="$SECRETS_DIR/$PROJECT_NAME"
 [[ -f "$SECRETS_DIR/$PROJECT_NAME.env" ]] && ENV_FILES+=(--env-file "$SECRETS_DIR/$PROJECT_NAME.env")
-[[ -f "$PROJECT_DIR/.env" ]] && ENV_FILES+=(--env-file "$PROJECT_DIR/.env")
+[[ -f "$PROJECT_FILE_SECRETS/.env" ]]     && ENV_FILES+=(--env-file "$PROJECT_FILE_SECRETS/.env")
+[[ -f "$PROJECT_DIR/.env" ]]              && ENV_FILES+=(--env-file "$PROJECT_DIR/.env")
 
 # ─── Volumes ────────────────────────────────────────────────
 MOUNTS=(
@@ -99,6 +112,45 @@ MOUNTS=(
   -v "$PIP_VOLUME:/home/dev/.pip-user"
   -v "$TOOLS_VOLUME:/opt/clau-tools"
 )
+
+# ─── File-based secrets auto-injection ──────────────────────
+# Mỗi file trong secrets/<project>/ (trừ .env) sẽ được mount vào
+# /run/clau-secrets/ và auto-inject path làm env var:
+#   gcp.json      → GCP_JSON=/run/clau-secrets/gcp.json
+#                 + GOOGLE_APPLICATION_CREDENTIALS=... (well-known alias)
+#   kubeconfig    → KUBECONFIG=/run/clau-secrets/kubeconfig
+#   id_ed25519    → ID_ED25519=/run/clau-secrets/id_ed25519
+EXTRA_ENV=()
+if [[ -d "$PROJECT_FILE_SECRETS" ]]; then
+  MOUNTS+=(-v "$PROJECT_FILE_SECRETS:/run/clau-secrets:ro")
+  injected=()
+  while IFS= read -r -d '' f; do
+    fname="$(basename "$f")"
+    [[ "$fname" == ".env" ]] && continue
+    # Normalize: uppercase, mọi char không phải [A-Z0-9] → _, trim _.
+    var="$(printf '%s' "$fname" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
+    var="${var##_}"; var="${var%%_}"
+    [[ "$var" =~ ^[0-9] ]] && var="_$var"
+    [[ -z "$var" ]] && continue
+    EXTRA_ENV+=(-e "${var}=/run/clau-secrets/$fname")
+    injected+=("$var")
+    # Well-known aliases
+    case "$fname" in
+      gcp.json|service-account.json|gcp-*.json|*-gcp.json)
+        EXTRA_ENV+=(-e "GOOGLE_APPLICATION_CREDENTIALS=/run/clau-secrets/$fname")
+        injected+=("GOOGLE_APPLICATION_CREDENTIALS")
+        ;;
+      kubeconfig|kubeconfig.yaml|kubeconfig.yml)
+        EXTRA_ENV+=(-e "KUBECONFIG=/run/clau-secrets/$fname")
+        injected+=("KUBECONFIG")
+        ;;
+    esac
+  done < <(find "$PROJECT_FILE_SECRETS" -maxdepth 1 -type f -print0)
+  if [[ ${#injected[@]} -gt 0 ]]; then
+    echo "🔑 File secrets: $PROJECT_FILE_SECRETS → /run/clau-secrets (ro)"
+    echo "   Injected env vars: ${injected[*]}"
+  fi
+fi
 
 # Settings + hook (read-only) — overrides anything in the auth volume
 [[ -f "$SETTINGS_FILE" ]] && MOUNTS+=(-v "$SETTINGS_FILE:/home/dev/.claude/settings.json:ro")
@@ -130,7 +182,9 @@ unset OPENAI_API_KEY
 
 # ─── Entry command: persist bash_history qua volume ─────────
 # Map .bash_history vào /home/dev/.history-store/bash_history
+# Fix perms: Docker tạo named volume với owner root; chown về dev lần đầu.
 ENTRY_CMD='
+sudo chown dev:dev ~/.history-store 2>/dev/null || true
 mkdir -p ~/.history-store
 touch ~/.history-store/bash_history
 ln -sf ~/.history-store/bash_history ~/.bash_history
@@ -160,6 +214,7 @@ exec docker run -it --rm \
   -e PIP_BREAK_SYSTEM_PACKAGES=1 \
   -e PYTHONUSERBASE=/home/dev/.pip-user \
   "${FIREWALL_OPTS[@]}" \
+  "${EXTRA_ENV[@]}" \
   "${ENV_FILES[@]}" \
   "${MOUNTS[@]}" \
   -w "$PROJECT_DIR" \

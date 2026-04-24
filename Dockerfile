@@ -35,7 +35,7 @@ RUN groupadd --gid $USER_GID dev 2>/dev/null || true \
 USER dev
 WORKDIR /home/dev
 RUN curl -fsSL https://claude.ai/install.sh | bash
-RUN mkdir -p /home/dev/.pip-user/bin /home/dev/.codex
+RUN mkdir -p /home/dev/.pip-user/bin /home/dev/.codex /home/dev/.history-store
 ENV PATH="/opt/clau-tools/bin:/home/dev/.pip-user/bin:/home/dev/.local/bin:${PATH}"
 
 # OpenAI Codex CLI. Auth is persisted separately via the codex-auth Docker volume.
