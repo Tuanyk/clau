@@ -1,0 +1,21 @@
+# Anthropic
+api.anthropic.com
+claude.ai
+console.anthropic.com
+statsig.anthropic.com
+
+# Git hosting
+github.com
+api.github.com
+objects.githubusercontent.com
+raw.githubusercontent.com
+codeload.github.com
+
+# Package registries
+registry.npmjs.org
+pypi.org
+files.pythonhosted.org
+
+# System (cần cho apt, curl)
+deb.debian.org
+security.debian.org

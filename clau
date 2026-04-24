@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# clau — chạy Claude Code trong Docker: OAuth + firewall + per-project history
+set -euo pipefail
+
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}")"
+CONFIG_DIR="$(dirname "$SCRIPT_PATH")"
+IMAGE="claude-base"
+AUTH_VOLUME="claude-auth"
+SECRETS_DIR="$CONFIG_DIR/secrets"
+ALLOWLISTS_DIR="$CONFIG_DIR/allowlists"
+DEFAULT_ALLOWLIST="$CONFIG_DIR/allowlist.txt"
+
+# ─── Parse flags ────────────────────────────────────────────
+NO_FIREWALL=0
+DANGER=0
+for arg in "$@"; do
+  case "$arg" in
+    --no-firewall) NO_FIREWALL=1 ;;
+    --yolo) DANGER=1 ;;  # shortcut: --dangerously-skip-permissions
+  esac
+done
+
+# ─── Xác định dự án ─────────────────────────────────────────
+PROJECT_DIR="$(pwd)"
+PROJECT_NAME="$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+CONTAINER_NAME="clau-$PROJECT_NAME"
+HISTORY_VOLUME="clau-history-$PROJECT_NAME"
+
+# ─── Check image & auth ─────────────────────────────────────
+if ! docker image inspect "$IMAGE" &>/dev/null; then
+  echo "❌ Image chưa có. Chạy: $CONFIG_DIR/install.sh"; exit 1
+fi
+if ! docker volume inspect "$AUTH_VOLUME" &>/dev/null; then
+  echo "❌ Chưa login. Chạy: clau-login"; exit 1
+fi
+
+# ─── Tạo history volume (per-project) ───────────────────────
+docker volume inspect "$HISTORY_VOLUME" &>/dev/null || docker volume create "$HISTORY_VOLUME" >/dev/null
+
+# ─── Chọn allowlist ─────────────────────────────────────────
+PROJECT_ALLOWLIST="$ALLOWLISTS_DIR/$PROJECT_NAME.txt"
+ALLOWLIST_TO_USE=""
+if [[ -f "$PROJECT_ALLOWLIST" ]]; then
+  ALLOWLIST_TO_USE="$PROJECT_ALLOWLIST"
+  echo "🔥 Firewall allowlist riêng: $PROJECT_ALLOWLIST"
+elif [[ -f "$DEFAULT_ALLOWLIST" ]]; then
+  ALLOWLIST_TO_USE="$DEFAULT_ALLOWLIST"
+fi
+
+# ─── Env files ──────────────────────────────────────────────
+ENV_FILES=()
+[[ -f "$SECRETS_DIR/$PROJECT_NAME.env" ]] && ENV_FILES+=(--env-file "$SECRETS_DIR/$PROJECT_NAME.env")
+[[ -f "$PROJECT_DIR/.env" ]] && ENV_FILES+=(--env-file "$PROJECT_DIR/.env")
+
+# ─── Volumes ────────────────────────────────────────────────
+MOUNTS=(
+  -v "$PROJECT_DIR:/workspace"
+  -v "$AUTH_VOLUME:/home/dev/.claude"
+  -v "$HISTORY_VOLUME:/home/dev/.history-store"
+)
+
+# Mount allowlist nếu có và firewall không bị disable
+FIREWALL_OPTS=()
+if [[ -n "$ALLOWLIST_TO_USE" && "$NO_FIREWALL" -eq 0 ]]; then
+  MOUNTS+=(-v "$ALLOWLIST_TO_USE:/etc/allowlist.txt:ro")
+  FIREWALL_OPTS+=(
+    --cap-add=NET_ADMIN --cap-add=NET_RAW
+    -e CLAU_FIREWALL=1
+  )
+elif [[ "$NO_FIREWALL" -eq 1 ]]; then
+  echo "⚠️  Firewall disabled (--no-firewall)"
+fi
+
+# ─── Attach nếu đang chạy ───────────────────────────────────
+if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+  echo "📎 Attach..."
+  exec docker exec -it "$CONTAINER_NAME" bash
+fi
+if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+  docker rm "$CONTAINER_NAME" &>/dev/null
+fi
+
+unset ANTHROPIC_API_KEY
+
+# ─── Entry command: persist bash_history qua volume ─────────
+# Map .bash_history vào /home/dev/.history-store/bash_history
+ENTRY_CMD='
+mkdir -p ~/.history-store
+touch ~/.history-store/bash_history
+ln -sf ~/.history-store/bash_history ~/.bash_history
+echo "✓ $(hostname) — firewall: $([ -n \"$CLAU_FIREWALL\" ] && echo ON || echo OFF)"
+echo "  Gõ: claude"
+'
+if [[ "$DANGER" -eq 1 ]]; then
+  ENTRY_CMD+='echo "  ⚡ --yolo mode: sẽ chạy claude --dangerously-skip-permissions";'
+  ENTRY_CMD+='exec bash -c "claude --dangerously-skip-permissions; exec bash"'
+else
+  ENTRY_CMD+='exec bash'
+fi
+
+echo "🚀 $CONTAINER_NAME"
+exec docker run -it --rm \
+  --name "$CONTAINER_NAME" \
+  --hostname "$PROJECT_NAME" \
+  -e ANTHROPIC_API_KEY= \
+  "${FIREWALL_OPTS[@]}" \
+  "${ENV_FILES[@]}" \
+  "${MOUNTS[@]}" \
+  -w /workspace \
+  "$IMAGE" \
+  bash -c "$ENTRY_CMD"

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}")"
+CONFIG_DIR="$(dirname "$SCRIPT_PATH")"
+IMAGE="claude-base"
+VOLUME="claude-auth"
+
+docker volume inspect "$VOLUME" &>/dev/null || docker volume create "$VOLUME"
+
+echo "🔐 Login 1 lần. Follow hướng dẫn trên terminal (có thể cần copy URL sang browser)."
+
+NETWORK_OPTS="--network host"
+[[ "$(uname)" == "Darwin" ]] && NETWORK_OPTS=""  # Mac: OAuth thường dùng copy-paste URL
+
+# Login không cần firewall
+exec docker run -it --rm \
+  --name clau-login \
+  $NETWORK_OPTS \
+  -v "$VOLUME:/home/dev/.claude" \
+  "$IMAGE" \
+  bash -c 'claude /login || claude'
