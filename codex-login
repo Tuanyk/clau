@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}")"
+CONFIG_DIR="$(dirname "$SCRIPT_PATH")"
+IMAGE="claude-base"
+VOLUME="codex-auth"
+
+if ! docker image inspect "$IMAGE" &>/dev/null; then
+  echo "❌ Image chưa có. Chạy: $CONFIG_DIR/install.sh"
+  exit 1
+fi
+
+docker volume inspect "$VOLUME" &>/dev/null || docker volume create "$VOLUME" >/dev/null
+
+echo "🔐 Codex login 1 lần. Nên chọn ChatGPT/device login thay vì API key."
+echo "   Credential sẽ lưu trong Docker volume: $VOLUME"
+
+NETWORK_OPTS="--network host"
+[[ "$(uname)" == "Darwin" ]] && NETWORK_OPTS=""  # Mac: OAuth thường dùng copy-paste URL
+
+unset OPENAI_API_KEY
+
+# Login không cần firewall. Prefer device auth for copy/paste-friendly OAuth.
+exec docker run -it --rm \
+  --name clau-codex-login \
+  $NETWORK_OPTS \
+  -e OPENAI_API_KEY= \
+  -e CODEX_HOME=/home/dev/.codex \
+  -v "$VOLUME:/home/dev/.codex" \
+  "$IMAGE" \
+  bash -lc 'codex login --device-auth || codex login'

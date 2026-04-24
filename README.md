@@ -1,22 +1,34 @@
 # clau
 
-Run Claude Code (or other AI CLIs) inside a Docker container. Per-project firewall, persistent auth, persistent shell history, and a shared pip volume so AI-installed Python packages survive across sessions.
+Run Claude Code and OpenAI Codex inside a Docker container. Per-project firewall, persistent auth, persistent shell history, and shared tool/package volumes so AI-installed tools survive across sessions.
 
 ## Install
 
 ```bash
-./install.sh        # builds the image, symlinks `clau` and `clau-login` into ~/.local/bin
-clau-login          # one-time OAuth login (stored in the `claude-auth` Docker volume)
+./install.sh        # builds the image, symlinks `clau`, `clau-login`, `codex-login`
+clau-login          # one-time Claude OAuth login (stored in `claude-auth`)
+codex-login         # one-time Codex ChatGPT login (stored in `codex-auth`)
 ```
 
 ## Run
 
 ```bash
 cd ~/path/to/project
-clau                # default: firewall ON, allowlist from ./allowlist.txt
-clau --yolo         # adds --dangerously-skip-permissions
+clau                # shell in the container; run `claude` or `codex`
+clau --codex        # open Codex directly
+clau --yolo         # open Claude with --dangerously-skip-permissions
+clau --codex --yolo # open Codex with --dangerously-bypass-approvals-and-sandbox
 clau --no-firewall  # debug mode
 ```
+
+Claude and Codex credentials are intentionally separate:
+
+```text
+claude-auth -> /home/dev/.claude
+codex-auth  -> /home/dev/.codex
+```
+
+This keeps OAuth/session credentials inside Docker volumes instead of using your host API keys. The launcher intentionally blanks `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` for the container, even if they exist on the host or in an env file, so Claude/Codex do not inherit long-lived API keys.
 
 ## Secrets / API keys / credentials
 
@@ -29,7 +41,7 @@ Drop a `.env` file at `secrets/<project-name>.env` inside the clau install dir. 
 ```bash
 # project at ~/work/my-app  →  project-name = "my-app"
 cat > /path/to/clau/secrets/my-app.env <<EOF
-OPENAI_API_KEY=sk-...
+APP_OPENAI_API_KEY=sk-...
 DATABASE_URL=postgres://...
 EOF
 ```
@@ -59,9 +71,9 @@ The AI should reference the variable **by name** in code, never `cat` / `printen
 ```markdown
 ## Secrets
 
-The following env vars are available inside the container. Use them by name in code (e.g. `os.environ["OPENAI_API_KEY"]`). DO NOT print, log, echo, or cat them — treat the values as opaque.
+The following env vars are available inside the container. Use them by name in code (e.g. `os.environ["APP_OPENAI_API_KEY"]`). DO NOT print, log, echo, or cat them — treat the values as opaque.
 
-- `OPENAI_API_KEY` — OpenAI API key
+- `APP_OPENAI_API_KEY` — app-scoped OpenAI API key
 - `DATABASE_URL` — Postgres connection string
 - `GOOGLE_APPLICATION_CREDENTIALS` — path to GCP service account JSON
 ```
@@ -121,6 +133,7 @@ One domain per line. The container can only reach hosts on the allowlist (plus D
 | Volume | Purpose | Scope |
 |---|---|---|
 | `claude-auth` | Claude OAuth session | global |
+| `codex-auth` | Codex ChatGPT/API auth and Codex config | global |
 | `clau-pip` | pip-installed Python packages | global, all projects |
 | `clau-tools` | dev tools (Headroom, Caveman, ...) | global, all projects |
 | `clau-history-<project>` | bash history | per-project |

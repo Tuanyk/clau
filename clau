@@ -5,7 +5,8 @@ set -euo pipefail
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}")"
 CONFIG_DIR="$(dirname "$SCRIPT_PATH")"
 IMAGE="claude-base"
-AUTH_VOLUME="claude-auth"
+CLAUDE_AUTH_VOLUME="claude-auth"
+CODEX_AUTH_VOLUME="codex-auth"
 PIP_VOLUME="clau-pip"
 TOOLS_VOLUME="clau-tools"
 SETTINGS_FILE="$CONFIG_DIR/claude-settings.json"
@@ -17,10 +18,12 @@ DEFAULT_ALLOWLIST="$CONFIG_DIR/allowlist.txt"
 # ─── Parse flags ────────────────────────────────────────────
 NO_FIREWALL=0
 DANGER=0
+RUN_CODEX=0
 for arg in "$@"; do
   case "$arg" in
     --no-firewall) NO_FIREWALL=1 ;;
     --yolo) DANGER=1 ;;  # shortcut: --dangerously-skip-permissions
+    --codex) RUN_CODEX=1 ;;
   esac
 done
 
@@ -34,9 +37,11 @@ HISTORY_VOLUME="clau-history-$PROJECT_NAME"
 if ! docker image inspect "$IMAGE" &>/dev/null; then
   echo "❌ Image chưa có. Chạy: $CONFIG_DIR/install.sh"; exit 1
 fi
-if ! docker volume inspect "$AUTH_VOLUME" &>/dev/null; then
-  echo "❌ Chưa login. Chạy: clau-login"; exit 1
-fi
+
+# Auth volumes are created on demand. Use clau-login / codex-login once to
+# populate them, then credentials persist across container runs.
+docker volume inspect "$CLAUDE_AUTH_VOLUME" &>/dev/null || docker volume create "$CLAUDE_AUTH_VOLUME" >/dev/null
+docker volume inspect "$CODEX_AUTH_VOLUME" &>/dev/null || docker volume create "$CODEX_AUTH_VOLUME" >/dev/null
 
 # ─── Tạo history volume (per-project) ───────────────────────
 docker volume inspect "$HISTORY_VOLUME" &>/dev/null || docker volume create "$HISTORY_VOLUME" >/dev/null
@@ -65,7 +70,8 @@ ENV_FILES=()
 # ─── Volumes ────────────────────────────────────────────────
 MOUNTS=(
   -v "$PROJECT_DIR:/workspace"
-  -v "$AUTH_VOLUME:/home/dev/.claude"
+  -v "$CLAUDE_AUTH_VOLUME:/home/dev/.claude"
+  -v "$CODEX_AUTH_VOLUME:/home/dev/.codex"
   -v "$HISTORY_VOLUME:/home/dev/.history-store"
   -v "$PIP_VOLUME:/home/dev/.pip-user"
   -v "$TOOLS_VOLUME:/opt/clau-tools"
@@ -97,6 +103,7 @@ if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
 fi
 
 unset ANTHROPIC_API_KEY
+unset OPENAI_API_KEY
 
 # ─── Entry command: persist bash_history qua volume ─────────
 # Map .bash_history vào /home/dev/.history-store/bash_history
@@ -105,9 +112,14 @@ mkdir -p ~/.history-store
 touch ~/.history-store/bash_history
 ln -sf ~/.history-store/bash_history ~/.bash_history
 echo "✓ $(hostname) — firewall: $([ -n \"$CLAU_FIREWALL\" ] && echo ON || echo OFF)"
-echo "  Gõ: claude"
+echo "  Gõ: claude hoặc codex"
 '
-if [[ "$DANGER" -eq 1 ]]; then
+if [[ "$RUN_CODEX" -eq 1 && "$DANGER" -eq 1 ]]; then
+  ENTRY_CMD+='echo "  ⚡ --yolo mode: sẽ chạy codex --dangerously-bypass-approvals-and-sandbox";'
+  ENTRY_CMD+='exec bash -c "codex --dangerously-bypass-approvals-and-sandbox; exec bash"'
+elif [[ "$RUN_CODEX" -eq 1 ]]; then
+  ENTRY_CMD+='exec bash -c "codex; exec bash"'
+elif [[ "$DANGER" -eq 1 ]]; then
   ENTRY_CMD+='echo "  ⚡ --yolo mode: sẽ chạy claude --dangerously-skip-permissions";'
   ENTRY_CMD+='exec bash -c "claude --dangerously-skip-permissions; exec bash"'
 else
@@ -119,6 +131,8 @@ exec docker run -it --rm \
   --name "$CONTAINER_NAME" \
   --hostname "$PROJECT_NAME" \
   -e ANTHROPIC_API_KEY= \
+  -e OPENAI_API_KEY= \
+  -e CODEX_HOME=/home/dev/.codex \
   -e PIP_USER=1 \
   -e PIP_BREAK_SYSTEM_PACKAGES=1 \
   -e PYTHONUSERBASE=/home/dev/.pip-user \

@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates git sudo bash \
     iptables ipset dnsutils \
     fzf \
+    nodejs npm \
     python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
@@ -34,8 +35,13 @@ RUN groupadd --gid $USER_GID dev 2>/dev/null || true \
 USER dev
 WORKDIR /home/dev
 RUN curl -fsSL https://claude.ai/install.sh | bash
-RUN mkdir -p /home/dev/.pip-user/bin
+RUN mkdir -p /home/dev/.pip-user/bin /home/dev/.codex
 ENV PATH="/opt/clau-tools/bin:/home/dev/.pip-user/bin:/home/dev/.local/bin:${PATH}"
+
+# OpenAI Codex CLI. Auth is persisted separately via the codex-auth Docker volume.
+USER root
+RUN npm install -g @openai/codex
+USER dev
 
 # Git config cho delta
 RUN git config --global core.pager "delta" \

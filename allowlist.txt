@@ -4,6 +4,13 @@ claude.ai
 console.anthropic.com
 statsig.anthropic.com
 
+# OpenAI / Codex
+api.openai.com
+auth.openai.com
+chatgpt.com
+platform.openai.com
+developers.openai.com
+
 # Git hosting
 github.com
 api.github.com
