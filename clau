@@ -69,7 +69,7 @@ ENV_FILES=()
 
 # ─── Volumes ────────────────────────────────────────────────
 MOUNTS=(
-  -v "$PROJECT_DIR:/workspace"
+  -v "$PROJECT_DIR:$PROJECT_DIR"
   -v "$CLAUDE_AUTH_VOLUME:/home/dev/.claude"
   -v "$CODEX_AUTH_VOLUME:/home/dev/.codex"
   -v "$HISTORY_VOLUME:/home/dev/.history-store"
@@ -139,6 +139,6 @@ exec docker run -it --rm \
   "${FIREWALL_OPTS[@]}" \
   "${ENV_FILES[@]}" \
   "${MOUNTS[@]}" \
-  -w /workspace \
+  -w "$PROJECT_DIR" \
   "$IMAGE" \
   bash -c "$ENTRY_CMD"

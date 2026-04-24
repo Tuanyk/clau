@@ -56,13 +56,14 @@ Both files are loaded if both exist; project `.env` wins on conflicting keys.
 
 ### Credential files (not just env vars)
 
-For things like `gcloud` credentials JSON or SSH keys, mount them as files. Easiest path: keep them inside the project at a gitignored path and reference them by path from a `.env`:
+For things like `gcloud` credentials JSON or SSH keys, mount them as files. Easiest path: keep them inside the project at a gitignored path and reference them by path from a `.env`. The project is mounted at the same absolute path inside the container as on the host, so use the host path:
 
 ```env
-GOOGLE_APPLICATION_CREDENTIALS=/workspace/.secrets/gcp.json
+# if your project is at /home/me/work/my-app
+GOOGLE_APPLICATION_CREDENTIALS=/home/me/work/my-app/.secrets/gcp.json
 ```
 
-Then put the JSON inside your project at `.secrets/gcp.json` (gitignored) — it's available at `/workspace/.secrets/gcp.json` inside the container.
+Then put the JSON inside your project at `.secrets/gcp.json` (gitignored) — it's available at the same path inside the container.
 
 ## Telling the AI to USE a secret without reading its value
 
