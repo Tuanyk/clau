@@ -8,6 +8,7 @@ IMAGE="claude-base"
 CLAUDE_AUTH_VOLUME="claude-auth"
 CODEX_AUTH_VOLUME="codex-auth"
 PIP_VOLUME="clau-pip"
+NPM_VOLUME="clau-npm"
 TOOLS_VOLUME="clau-tools"
 SETTINGS_FILE="$CONFIG_DIR/claude-settings.json"
 HOOKS_DIR="$CONFIG_DIR/hooks"
@@ -34,10 +35,15 @@ done
 # container-name. Override bằng: CLAU_PROJECT_NAME=... clau
 PROJECT_DIR="$(pwd)"
 if [[ -n "${CLAU_PROJECT_NAME:-}" ]]; then
-  PROJECT_NAME="$(printf '%s' "$CLAU_PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+  raw_name="$CLAU_PROJECT_NAME"
 else
-  PROJECT_NAME="$(basename "$PROJECT_DIR" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+  raw_name="$(basename "$PROJECT_DIR")"
 fi
+# printf '%s' — tránh basename trailing newline bị tr convert thành '-'.
+# Trim luôn leading/trailing '-' để ra name sạch.
+PROJECT_NAME="$(printf '%s' "$raw_name" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+PROJECT_NAME="${PROJECT_NAME##-}"
+PROJECT_NAME="${PROJECT_NAME%%-}"
 CONTAINER_NAME="clau-$PROJECT_NAME"
 HISTORY_VOLUME="clau-history-$PROJECT_NAME"
 echo "📁 Project: $PROJECT_NAME  ($PROJECT_DIR)"
@@ -80,6 +86,9 @@ docker volume inspect "$HISTORY_VOLUME" &>/dev/null || docker volume create "$HI
 # ─── Tạo pip volume (dùng chung mọi project) ────────────────
 docker volume inspect "$PIP_VOLUME" &>/dev/null || docker volume create "$PIP_VOLUME" >/dev/null
 
+# ─── Tạo npm cache volume (dùng chung mọi project) ──────────
+docker volume inspect "$NPM_VOLUME" &>/dev/null || docker volume create "$NPM_VOLUME" >/dev/null
+
 # ─── Tạo tools volume (dùng chung mọi project) ──────────────
 docker volume inspect "$TOOLS_VOLUME" &>/dev/null || docker volume create "$TOOLS_VOLUME" >/dev/null
 
@@ -110,8 +119,21 @@ MOUNTS=(
   -v "$CODEX_AUTH_VOLUME:/home/dev/.codex"
   -v "$HISTORY_VOLUME:/home/dev/.history-store"
   -v "$PIP_VOLUME:/home/dev/.pip-user"
+  -v "$NPM_VOLUME:/home/dev/.npm"
   -v "$TOOLS_VOLUME:/opt/clau-tools"
 )
+
+# ─── Port forwarding cho dev servers ────────────────────────
+# Mặc định expose 3000 (Next.js). Override bằng CLAU_PORTS=3000,5173,8080.
+# Bind vào 127.0.0.1 để không lộ ra LAN.
+CLAU_PORTS_RAW="${CLAU_PORTS:-3000}"
+PORT_OPTS=()
+exposed_ports=()
+for port in ${CLAU_PORTS_RAW//,/ }; do
+  PORT_OPTS+=(-p "127.0.0.1:${port}:${port}")
+  exposed_ports+=("$port")
+done
+[[ ${#exposed_ports[@]} -gt 0 ]] && echo "🌐 Ports: ${exposed_ports[*]} → 127.0.0.1 (host)"
 
 # ─── File-based secrets auto-injection ──────────────────────
 # Mỗi file trong secrets/<project>/ (trừ .env) sẽ được mount vào
@@ -152,8 +174,10 @@ if [[ -d "$PROJECT_FILE_SECRETS" ]]; then
   fi
 fi
 
-# Settings + hook (read-only) — overrides anything in the auth volume
-[[ -f "$SETTINGS_FILE" ]] && MOUNTS+=(-v "$SETTINGS_FILE:/home/dev/.claude/settings.json:ro")
+# Policy (deny rules + hooks) ở managed-settings path — admin-scope, read-only,
+# override cả user/project settings. User vẫn ghi được ~/.claude/settings.json
+# (theme, model, effort, ...) mà không vướng EROFS.
+[[ -f "$SETTINGS_FILE" ]] && MOUNTS+=(-v "$SETTINGS_FILE:/etc/claude-code/managed-settings.json:ro")
 [[ -d "$HOOKS_DIR" ]] && MOUNTS+=(-v "$HOOKS_DIR:/etc/clau/hooks:ro")
 
 # Mount allowlist nếu có và firewall không bị disable
@@ -170,7 +194,9 @@ fi
 
 # ─── Attach nếu đang chạy ───────────────────────────────────
 if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-  echo "📎 Attach..."
+  echo "📎 Attach to existing $CONTAINER_NAME"
+  echo "   ⚠️  Env vars and mounts from this run are NOT applied on attach."
+  echo "      To pick up secrets/ or .env changes: docker stop $CONTAINER_NAME && clau"
   exec docker exec -it "$CONTAINER_NAME" bash
 fi
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
@@ -183,13 +209,24 @@ unset OPENAI_API_KEY
 # ─── Entry command: persist bash_history qua volume ─────────
 # Map .bash_history vào /home/dev/.history-store/bash_history
 # Fix perms: Docker tạo named volume với owner root; chown về dev lần đầu.
+# In env summary sau khi start (chỉ chạy trên fresh docker run, không trên attach).
 ENTRY_CMD='
-sudo chown dev:dev ~/.history-store 2>/dev/null || true
+sudo chown dev:dev ~/.history-store ~/.npm 2>/dev/null || true
 mkdir -p ~/.history-store
 touch ~/.history-store/bash_history
 ln -sf ~/.history-store/bash_history ~/.bash_history
 echo "✓ $(hostname) — firewall: $([ -n \"$CLAU_FIREWALL\" ] && echo ON || echo OFF)"
-echo "  Gõ: claude hoặc codex"
+echo ""
+echo "─── Env vars available (names only) ───"
+env | cut -d= -f1 | sort \
+  | grep -v -E "^(_|HOME|HOSTNAME|LANG|LC_[A-Z_]+|LINES|COLUMNS|PATH|PWD|SHLVL|TERM|USER|LOGNAME|SHELL|MAIL|OLDPWD)$" \
+  | sed "s/^/  /"
+if [ -d /run/clau-secrets ] && [ -n "$(ls -A /run/clau-secrets 2>/dev/null)" ]; then
+  echo "─── /run/clau-secrets files ───"
+  ls -1 /run/clau-secrets | sed "s/^/  /"
+fi
+echo ""
+echo "Type: claude, codex, or env | sort for full list"
 '
 if [[ "$RUN_CODEX" -eq 1 && "$DANGER" -eq 1 ]]; then
   ENTRY_CMD+='echo "  ⚡ --yolo mode: sẽ chạy codex --dangerously-bypass-approvals-and-sandbox";'
@@ -214,6 +251,7 @@ exec docker run -it --rm \
   -e PIP_BREAK_SYSTEM_PACKAGES=1 \
   -e PYTHONUSERBASE=/home/dev/.pip-user \
   "${FIREWALL_OPTS[@]}" \
+  "${PORT_OPTS[@]}" \
   "${EXTRA_ENV[@]}" \
   "${ENV_FILES[@]}" \
   "${MOUNTS[@]}" \

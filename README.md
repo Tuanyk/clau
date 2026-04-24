@@ -163,7 +163,7 @@ Once a tool is proven, "promote" it by adding the install command to the `Docker
 
 Two layers run inside every `clau` container to catch obvious secret-reading attempts:
 
-**Layer 1 — `permissions.deny`** in `claude-settings.json`. Pattern-blocks Claude Code tool calls like `Read(/root/**)`, `Bash(printenv)`, `Bash(env)`, `Bash(cat:/run/secrets/**)`, etc.
+**Layer 1 — `permissions.deny`** in `claude-settings.json`. Mounted read-only at `/etc/claude-code/managed-settings.json` inside the container — Claude Code's "managed" scope, which overrides user/project settings and cannot be disabled by the AI. Pattern-blocks tool calls like `Read(/root/**)`, `Bash(printenv)`, `Bash(env)`, `Bash(cat:/run/secrets/**)`, etc. User preferences (theme, model, effort) still save normally to `~/.claude/settings.json`.
 
 **Layer 2 — `PreToolUse` hook** at `hooks/secrets-guard.py`. Inspects every Bash/Read/Write/Edit call, blocks patterns like `cat /root/...`, dynamic DNS lookups (`nslookup $X`), POSTing env vars to external hosts, writing PEM blocks to disk. Logs all blocks to `/var/log/clau/secrets-guard.log` (root-owned, AI cannot read).
 

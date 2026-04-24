@@ -2,3 +2,8 @@ secrets/*.env
 secrets/*
 !secrets/.gitkeep
 .codex
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
