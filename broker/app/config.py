@@ -9,7 +9,19 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 SECRETS_DIR = Path("/run/broker-secrets")
+
+
+def _load_secret_env_files() -> None:
+    if not SECRETS_DIR.is_dir():
+        return
+    for env_file in sorted(SECRETS_DIR.glob("*.env")):
+        load_dotenv(env_file, override=True)
+
+
+_load_secret_env_files()
 
 
 def _autodetect_gcp_sa() -> str | None:

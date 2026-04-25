@@ -28,8 +28,8 @@ secrets/
       gcp-sa.json              # Service account for GA4 + GSC + GTM
 ```
 
-Every `*.env` under `broker/` is sourced into the broker process at
-startup; `gcp-sa.json` (or `service-account.json`) auto-sets
+Every `*.env` under `broker/` is loaded as dotenv data by the broker process
+at startup; `gcp-sa.json` (or `service-account.json`) auto-sets
 `GOOGLE_APPLICATION_CREDENTIALS`.
 
 ## Per-provider opt-in

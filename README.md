@@ -243,6 +243,9 @@ changes — the broker isn't started, behavior is identical to before.
 
 **Lifecycle**: the broker container stays up after `clau` exits so
 re-attach is fast. Stop it explicitly with `docker stop broker-<project>`.
+If broker startup fails, the stopped container is kept so you can inspect it:
+`docker logs --tail 80 broker-<project>`. To print those logs during launcher
+startup, run `CLAU_BROKER_SHOW_LOGS=1 clau`.
 
 ## Defense-in-depth: secrets guard
 

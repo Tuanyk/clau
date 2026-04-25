@@ -19,8 +19,8 @@ secrets/<project>/broker/
   gcp-sa.json         # service account JSON for GA4 + GSC
 ```
 
-Every `*.env` under that directory is sourced into the broker's process
-environment at startup. `gcp-sa.json` (or `service-account.json` /
+Every `*.env` under that directory is loaded as dotenv data by the broker
+process at startup. `gcp-sa.json` (or `service-account.json` /
 `gcp.json`) auto-sets `GOOGLE_APPLICATION_CREDENTIALS`.
 
 The directory is mounted **read-only at `/run/broker-secrets`** in the

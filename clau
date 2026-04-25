@@ -164,7 +164,6 @@ if [[ -d "$BROKER_DIR" ]]; then
   if ! docker image inspect "$BROKER_IMAGE" &>/dev/null; then
     echo "⚠️  Broker image chưa có ($BROKER_IMAGE). Skip broker. Build: $CONFIG_DIR/install.sh"
   else
-    BROKER_ENABLED=1
     BROKER_NETWORK="clau-net-$PROJECT_NAME"
     BROKER_NAME="broker-$PROJECT_NAME"
     BROKER_ALLOWLIST="$ALLOWLISTS_DIR/broker.txt"
@@ -183,10 +182,11 @@ if [[ -d "$BROKER_DIR" ]]; then
     docker network inspect "$BROKER_NETWORK" &>/dev/null \
       || docker network create "$BROKER_NETWORK" >/dev/null
 
+    BROKER_READY=0
     if ! docker ps --format '{{.Names}}' | grep -q "^${BROKER_NAME}$"; then
       # Stop any stale stopped container with the same name.
       docker rm -f "$BROKER_NAME" &>/dev/null || true
-      docker run -d --rm \
+      docker run -d \
         --name "$BROKER_NAME" \
         --network "$BROKER_NETWORK" \
         --network-alias broker \
@@ -197,20 +197,50 @@ if [[ -d "$BROKER_DIR" ]]; then
         "$BROKER_IMAGE" >/dev/null
       # Wait for broker to be reachable (≤8s).
       for _ in $(seq 1 16); do
-        sleep 0.5
         docker exec "$BROKER_NAME" sh -c \
-          'curl -fs -m 1 http://127.0.0.1:8080/health' &>/dev/null && break
+          'curl -fs -m 1 http://127.0.0.1:8080/health' &>/dev/null && {
+            BROKER_READY=1
+            break
+          }
+        docker ps --format '{{.Names}}' | grep -q "^${BROKER_NAME}$" || break
+        sleep 0.5
       done
+    else
+      docker exec "$BROKER_NAME" sh -c \
+        'curl -fs -m 1 http://127.0.0.1:8080/health' &>/dev/null && BROKER_READY=1
     fi
 
-    BROKER_IP="$(docker inspect -f \
+    if [[ "$BROKER_READY" -ne 1 ]]; then
+      echo "❌ Broker $BROKER_NAME did not start cleanly."
+      if [[ "${CLAU_BROKER_SHOW_LOGS:-0}" == "1" ]]; then
+        echo "   Recent logs:"
+        docker logs --tail 80 "$BROKER_NAME" 2>&1 | sed 's/^/   /' || true
+      else
+        echo "   Logs are available with: docker logs --tail 80 $BROKER_NAME"
+      fi
+      echo "   Fix the broker error above, then run: docker rm -f $BROKER_NAME && clau"
+      echo "   To disable broker mode for this project, remove or rename: $BROKER_DIR"
+      exit 1
+    fi
+
+    if ! BROKER_IP="$(docker inspect -f \
       "{{(index .NetworkSettings.Networks \"$BROKER_NETWORK\").IPAddress}}" \
-      "$BROKER_NAME")"
+      "$BROKER_NAME")"; then
+      echo "❌ Broker $BROKER_NAME is not inspectable after startup."
+      if [[ "${CLAU_BROKER_SHOW_LOGS:-0}" == "1" ]]; then
+        echo "   Recent logs:"
+        docker logs --tail 80 "$BROKER_NAME" 2>&1 | sed 's/^/   /' || true
+      else
+        echo "   Logs are available with: docker logs --tail 80 $BROKER_NAME"
+      fi
+      exit 1
+    fi
 
     if [[ -z "$BROKER_IP" ]]; then
-      echo "⚠️  Không lấy được IP broker; skip broker mode."
-      BROKER_ENABLED=0
+      echo "❌ Không lấy được IP broker $BROKER_NAME trên network $BROKER_NETWORK."
+      exit 1
     else
+      BROKER_ENABLED=1
       echo "🤝 Broker: $BROKER_NAME ($BROKER_IP:$BROKER_PORT) on $BROKER_NETWORK"
     fi
   fi
