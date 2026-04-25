@@ -101,13 +101,24 @@ docker volume inspect "$NPM_VOLUME" &>/dev/null || docker volume create "$NPM_VO
 docker volume inspect "$TOOLS_VOLUME" &>/dev/null || docker volume create "$TOOLS_VOLUME" >/dev/null
 
 # ─── Chọn allowlist ─────────────────────────────────────────
+# Project-specific allowlist (allowlists/<project>.txt) is APPENDED to
+# default (allowlist.txt), so projects only declare extras (e.g. their own
+# API endpoints) without losing access to Anthropic/OpenAI/git/pkg registries.
 PROJECT_ALLOWLIST="$ALLOWLISTS_DIR/$PROJECT_NAME.txt"
 ALLOWLIST_TO_USE=""
-if [[ -f "$PROJECT_ALLOWLIST" ]]; then
-  ALLOWLIST_TO_USE="$PROJECT_ALLOWLIST"
-  echo "🔥 Firewall allowlist riêng: $PROJECT_ALLOWLIST"
-elif [[ -f "$DEFAULT_ALLOWLIST" ]]; then
-  ALLOWLIST_TO_USE="$DEFAULT_ALLOWLIST"
+if [[ -f "$DEFAULT_ALLOWLIST" || -f "$PROJECT_ALLOWLIST" ]]; then
+  ALLOWLIST_TO_USE="/tmp/clau-allowlist-$PROJECT_NAME.txt"
+  : > "$ALLOWLIST_TO_USE"
+  if [[ -f "$DEFAULT_ALLOWLIST" ]]; then
+    cat "$DEFAULT_ALLOWLIST" >> "$ALLOWLIST_TO_USE"
+    # Guarantee newline between files even if default has no trailing one.
+    [[ -n "$(tail -c1 "$ALLOWLIST_TO_USE")" ]] && printf '\n' >> "$ALLOWLIST_TO_USE"
+  fi
+  if [[ -f "$PROJECT_ALLOWLIST" ]]; then
+    printf '# Project: %s\n' "$PROJECT_NAME" >> "$ALLOWLIST_TO_USE"
+    cat "$PROJECT_ALLOWLIST" >> "$ALLOWLIST_TO_USE"
+    echo "🔥 Firewall allowlist: default + $PROJECT_ALLOWLIST"
+  fi
 fi
 
 # ─── Env files ──────────────────────────────────────────────
@@ -119,6 +130,77 @@ PROJECT_FILE_SECRETS="$SECRETS_DIR/$PROJECT_NAME"
 [[ -f "$SECRETS_DIR/$PROJECT_NAME.env" ]] && ENV_FILES+=(--env-file "$SECRETS_DIR/$PROJECT_NAME.env")
 [[ -f "$PROJECT_FILE_SECRETS/.env" ]]     && ENV_FILES+=(--env-file "$PROJECT_FILE_SECRETS/.env")
 [[ -f "$PROJECT_DIR/.env" ]]              && ENV_FILES+=(--env-file "$PROJECT_DIR/.env")
+
+# ─── Sidecar broker (per-project) ───────────────────────────
+# Nếu secrets/<project>/broker/ tồn tại thì project ở "brokered mode":
+#   - Spin up broker-<project> container giữ API creds (Meta token, GA SA,
+#     Google Ads developer token, ...). Broker mount creds read-only ở
+#     /run/broker-secrets, expose FastAPI :8080 trên docker network riêng.
+#   - clau-<project> tham gia cùng network, nhận BROKER_URL/BROKER_IP/BROKER_PORT.
+#     Claude KHÔNG có creds — chỉ gọi http://broker:8080/... còn broker
+#     inject Authorization rồi forward tới Meta / Google.
+# Nếu thư mục không tồn tại → behavior như cũ, không có broker container.
+BROKER_DIR="$PROJECT_FILE_SECRETS/broker"
+BROKER_ENABLED=0
+BROKER_NETWORK=""
+BROKER_IP=""
+BROKER_PORT=8080
+if [[ -d "$BROKER_DIR" ]]; then
+  BROKER_IMAGE="clau-broker"
+  if ! docker image inspect "$BROKER_IMAGE" &>/dev/null; then
+    echo "⚠️  Broker image chưa có ($BROKER_IMAGE). Skip broker. Build: $CONFIG_DIR/install.sh"
+  else
+    BROKER_ENABLED=1
+    BROKER_NETWORK="clau-net-$PROJECT_NAME"
+    BROKER_NAME="broker-$PROJECT_NAME"
+    BROKER_ALLOWLIST="$ALLOWLISTS_DIR/broker.txt"
+    BROKER_PROJECT_ALLOWLIST="$ALLOWLISTS_DIR/$PROJECT_NAME-broker.txt"
+
+    # Compose broker allowlist: shared + per-project extras (if any).
+    BROKER_ALLOW_TMP="/tmp/clau-broker-allow-$PROJECT_NAME.txt"
+    : > "$BROKER_ALLOW_TMP"
+    [[ -f "$BROKER_ALLOWLIST" ]] && cat "$BROKER_ALLOWLIST" >> "$BROKER_ALLOW_TMP"
+    [[ -n "$(tail -c1 "$BROKER_ALLOW_TMP" 2>/dev/null)" ]] && printf '\n' >> "$BROKER_ALLOW_TMP"
+    if [[ -f "$BROKER_PROJECT_ALLOWLIST" ]]; then
+      printf '# Project: %s (broker)\n' "$PROJECT_NAME" >> "$BROKER_ALLOW_TMP"
+      cat "$BROKER_PROJECT_ALLOWLIST" >> "$BROKER_ALLOW_TMP"
+    fi
+
+    docker network inspect "$BROKER_NETWORK" &>/dev/null \
+      || docker network create "$BROKER_NETWORK" >/dev/null
+
+    if ! docker ps --format '{{.Names}}' | grep -q "^${BROKER_NAME}$"; then
+      # Stop any stale stopped container with the same name.
+      docker rm -f "$BROKER_NAME" &>/dev/null || true
+      docker run -d --rm \
+        --name "$BROKER_NAME" \
+        --network "$BROKER_NETWORK" \
+        --network-alias broker \
+        --cap-add=NET_ADMIN --cap-add=NET_RAW \
+        -e CLAU_FIREWALL=1 \
+        -v "$BROKER_DIR:/run/broker-secrets:ro" \
+        -v "$BROKER_ALLOW_TMP:/etc/allowlist.txt:ro" \
+        "$BROKER_IMAGE" >/dev/null
+      # Wait for broker to be reachable (≤8s).
+      for _ in $(seq 1 16); do
+        sleep 0.5
+        docker exec "$BROKER_NAME" sh -c \
+          'curl -fs -m 1 http://127.0.0.1:8080/health' &>/dev/null && break
+      done
+    fi
+
+    BROKER_IP="$(docker inspect -f \
+      "{{(index .NetworkSettings.Networks \"$BROKER_NETWORK\").IPAddress}}" \
+      "$BROKER_NAME")"
+
+    if [[ -z "$BROKER_IP" ]]; then
+      echo "⚠️  Không lấy được IP broker; skip broker mode."
+      BROKER_ENABLED=0
+    else
+      echo "🤝 Broker: $BROKER_NAME ($BROKER_IP:$BROKER_PORT) on $BROKER_NETWORK"
+    fi
+  fi
+fi
 
 # ─── Volumes ────────────────────────────────────────────────
 MOUNTS=(
@@ -294,6 +376,19 @@ elif [[ "$NO_FIREWALL" -eq 1 ]]; then
   )
 fi
 
+# Broker network + env. Khi BROKER_ENABLED=1, gắn clau container vào docker
+# network của broker và inject BROKER_URL/BROKER_IP/BROKER_PORT để init-firewall.sh
+# whitelist được broker IP (cổng 8080, không nằm trong ipset 443/80).
+NETWORK_OPTS=()
+if [[ "$BROKER_ENABLED" -eq 1 ]]; then
+  NETWORK_OPTS+=(--network "$BROKER_NETWORK")
+  EXTRA_ENV+=(
+    -e "BROKER_URL=http://broker:$BROKER_PORT"
+    -e "BROKER_IP=$BROKER_IP"
+    -e "BROKER_PORT=$BROKER_PORT"
+  )
+fi
+
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
   docker rm "$CONTAINER_NAME" &>/dev/null
 fi
@@ -346,6 +441,7 @@ exec docker run -it --rm \
   -e PIP_BREAK_SYSTEM_PACKAGES=1 \
   -e PYTHONUSERBASE=/home/dev/.pip-user \
   "${FIREWALL_OPTS[@]}" \
+  "${NETWORK_OPTS[@]}" \
   "${PORT_OPTS[@]}" \
   "${EXTRA_ENV[@]}" \
   "${ENV_FILES[@]}" \

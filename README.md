@@ -176,6 +176,64 @@ docker volume rm clau-tools
 
 Once a tool is proven, "promote" it by adding the install command to the `Dockerfile` and rebuilding.
 
+## Sidecar broker (keep API keys out of Claude's container)
+
+For long-lived third-party credentials — Meta access tokens, Google
+service-account JSON, Google Ads developer/refresh tokens — the
+defense-in-depth layers below are *not enough*. Anything that lives in
+Claude's address space can theoretically be encoded and exfiltrated. The
+broker sidecar moves those secrets out of Claude's container entirely.
+
+**How it works.** Drop credentials under `secrets/<project>/broker/`
+instead of `secrets/<project>/`. On `clau` start:
+
+1. A `broker-<project>` container comes up on a private docker network
+   (`clau-net-<project>`) and reads creds from `/run/broker-secrets/`.
+2. The Claude container joins the same network and gets `BROKER_URL=http://broker:8080`.
+   It does **not** receive the API keys themselves.
+3. Claude's firewall removes Meta / Google Ads / Analytics / Search
+   Console hosts; only the broker IP and the standard dev hosts are
+   reachable. The broker has its own firewall (`allowlists/broker.txt`)
+   that allows only the provider APIs.
+4. Claude calls `POST http://broker:8080/meta/insights` etc. The broker
+   injects the access token, talks to graph.facebook.com, returns the
+   JSON. The token never appears in any tool result.
+
+```
+secrets/
+  client-foo/
+    .env              # ← visible to Claude (DB url, app secrets)
+    broker/           # ← visible to broker only
+      meta.env        # META_ACCESS_TOKEN=…, META_AD_ACCOUNT_ID=…
+      google-ads.env  # GOOGLE_ADS_DEVELOPER_TOKEN=…, refresh token, login customer id
+      gcp-sa.json     # service account JSON (GA4 + GSC)
+  client-bar/
+    broker/           # different keys for a different client — full isolation
+      meta.env
+      gcp-sa.json
+```
+
+**Multi-project**: each project pairs 1:1 with its own broker
+(`broker-<project>`) on its own docker network. Project A's Claude
+container can't reach project B's broker — they're on different
+networks with different credentials.
+
+**Endpoints** — see `broker/README.md` for the full list. Common ones:
+
+```
+POST /meta/insights              {ad_account_id, fields, params}
+POST /ga4/run-report             {property_id, dimensions, metrics, date_ranges}
+POST /gsc/search-analytics       {site_url, start_date, end_date, dimensions}
+POST /google-ads/query           {customer_id, gaql_query}
+ANY  /passthrough/meta/<path>    arbitrary Graph API call
+```
+
+**Opt-in**: if `secrets/<project>/broker/` doesn't exist, nothing
+changes — the broker isn't started, behavior is identical to before.
+
+**Lifecycle**: the broker container stays up after `clau` exits so
+re-attach is fast. Stop it explicitly with `docker stop broker-<project>`.
+
 ## Defense-in-depth: secrets guard
 
 Two layers run inside every `clau` container to catch obvious secret-reading attempts:
@@ -204,3 +262,4 @@ One domain per line. The container can only reach hosts on the allowlist (plus D
 | `clau-pip` | pip-installed Python packages | global, all projects |
 | `clau-tools` | dev tools (Headroom, Caveman, ...) | global, all projects |
 | `clau-history-<project>` | bash history | per-project |
+| `clau-net-<project>` | docker network shared by `clau-<project>` + `broker-<project>` | per-project (only when broker is enabled) |

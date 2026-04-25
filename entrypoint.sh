@@ -12,9 +12,10 @@ fi
 # directory from the codex-auth Docker volume.
 mkdir -p /home/dev/.codex
 
-# Setup firewall nếu có allowlist được mount
+# Setup firewall nếu có allowlist được mount. BROKER_IP/PORT pass dạng positional
+# vì sudo `env_reset` mặc định strip env vars; argv vẫn qua được nguyên vẹn.
 if [ -f /etc/allowlist.txt ] && [ -n "${CLAU_FIREWALL:-}" ]; then
-  sudo /usr/local/bin/init-firewall.sh /etc/allowlist.txt
+  sudo /usr/local/bin/init-firewall.sh /etc/allowlist.txt "${BROKER_IP:-}" "${BROKER_PORT:-}"
 fi
 
 # Traffic log (debug mode): sniff DNS queries, append unique-ish hostnames.

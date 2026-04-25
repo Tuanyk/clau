@@ -4,6 +4,8 @@
 set -euo pipefail
 
 ALLOWLIST_FILE="${1:-/etc/allowlist.txt}"
+BROKER_IP="${2:-}"
+BROKER_PORT="${3:-}"
 
 if [[ ! -f "$ALLOWLIST_FILE" ]]; then
   echo "⚠️  Không có allowlist file — skip firewall"
@@ -42,7 +44,10 @@ ipset destroy allowed-domains 2>/dev/null || true
 ipset create allowed-domains hash:ip
 
 # Resolve mỗi domain → add vào ipset
-while IFS= read -r domain; do
+# `|| [[ -n "$domain" ]]`: handle allowlist files without trailing newline
+# (otherwise `read` returns 1 on the last line and the loop body is skipped,
+# leaving the ipset empty → all HTTPS dropped → claude hangs at startup).
+while IFS= read -r domain || [[ -n "$domain" ]]; do
   # Bỏ comment và dòng trống
   domain="${domain%%#*}"
   domain="$(echo "$domain" | xargs)"
@@ -59,5 +64,12 @@ done < "$ALLOWLIST_FILE"
 # Chỉ cho phép outbound HTTPS/HTTP tới IP trong ipset
 iptables -A OUTPUT -p tcp --dport 443 -m set --match-set allowed-domains dst -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 80  -m set --match-set allowed-domains dst -j ACCEPT
+
+# Sidecar broker. Claude container reaches its paired broker on the dedicated
+# docker network. Launcher resolves the broker IP and passes BROKER_IP / BROKER_PORT.
+if [[ -n "${BROKER_IP:-}" && -n "${BROKER_PORT:-}" ]]; then
+  iptables -A OUTPUT -p tcp -d "$BROKER_IP" --dport "$BROKER_PORT" -j ACCEPT
+  echo "🔗 Broker rule: $BROKER_IP:$BROKER_PORT"
+fi
 
 echo "✅ Firewall active. Allowed IPs: $(ipset list allowed-domains | grep -c '^[0-9]')"

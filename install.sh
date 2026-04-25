@@ -4,16 +4,25 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LINK_DIR="$HOME/.local/bin"
 
-echo "📦 Build image..."
+echo "📦 Build image: claude-base..."
 docker build \
   --build-arg USER_UID=$(id -u) \
   --build-arg USER_GID=$(id -g) \
   -t claude-base \
   "$SCRIPT_DIR"
 
+# Broker sidecar image (holds API creds outside the Claude container).
+# Build context = repo root so the Dockerfile can COPY init-firewall.sh.
+echo "📦 Build image: clau-broker..."
+docker build \
+  -t clau-broker \
+  -f "$SCRIPT_DIR/broker/Dockerfile" \
+  "$SCRIPT_DIR"
+
 mkdir -p "$LINK_DIR" "$SCRIPT_DIR/secrets" "$SCRIPT_DIR/allowlists"
 chmod +x "$SCRIPT_DIR/clau" "$SCRIPT_DIR/clau-login" "$SCRIPT_DIR/codex-login" \
-         "$SCRIPT_DIR/entrypoint.sh" "$SCRIPT_DIR/init-firewall.sh"
+         "$SCRIPT_DIR/entrypoint.sh" "$SCRIPT_DIR/init-firewall.sh" \
+         "$SCRIPT_DIR/broker/entrypoint.sh"
 ln -sf "$SCRIPT_DIR/clau" "$LINK_DIR/clau"
 ln -sf "$SCRIPT_DIR/clau-login" "$LINK_DIR/clau-login"
 ln -sf "$SCRIPT_DIR/codex-login" "$LINK_DIR/codex-login"
