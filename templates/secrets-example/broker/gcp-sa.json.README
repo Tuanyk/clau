@@ -1,0 +1,29 @@
+Drop your Google service-account JSON file here, named `gcp-sa.json`.
+
+The same SA powers GA4, GSC, and GTM in the broker. Steps:
+
+1. Google Cloud Console → IAM & Admin → Service Accounts → Create
+   - Name: clau-broker-<project>
+   - Role: leave blank (we grant access per-product, not via IAM)
+2. On the new SA → Keys → Add Key → Create new key → JSON → Download.
+3. Save it to this directory as `gcp-sa.json`.
+4. Note the SA email, e.g. `clau-broker-foo@my-project.iam.gserviceaccount.com`.
+5. Grant access to each product separately:
+
+   GA4:
+     analytics.google.com → Admin → Property Access Management
+     → Add user → paste SA email → Viewer role.
+
+   GSC (Search Console):
+     search.google.com/search-console → Settings → Users and permissions
+     → Add user → paste SA email → Restricted/Full as needed.
+     (Service accounts must be added to EACH property separately.)
+
+   GTM (Tag Manager):
+     tagmanager.google.com → User Management → +
+     → paste SA email → choose Account permissions (Read or higher)
+     → choose Container permissions (Read for read-only access).
+
+Once dropped here, the broker auto-detects it on startup
+(GOOGLE_APPLICATION_CREDENTIALS is set internally) and the GA4 / GSC / GTM
+endpoints become available. Verify with: curl $BROKER_URL/health

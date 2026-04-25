@@ -96,5 +96,5 @@ def configured_providers() -> list[str]:
     if s["google_ads"].configured:
         out.append("google_ads")
     if s["google_sa"].configured:
-        out.extend(["ga4", "gsc"])
+        out.extend(["ga4", "gsc", "gtm"])
     return out

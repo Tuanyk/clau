@@ -24,6 +24,7 @@ If `BROKER_URL` is in your environment, this container does **not** hold third-p
   - `/meta/insights`, `/meta/campaigns`, `/meta/ad-accounts` — Marketing API
   - `/ga4/run-report` — GA4 Data API
   - `/gsc/sites`, `/gsc/search-analytics` — Search Console
+  - `/gtm/accounts`, `/gtm/accounts/{id}/containers` — Tag Manager
   - `/google-ads/query`, `/google-ads/customers` — Google Ads (GAQL)
   - `/passthrough/meta/<path>` — escape hatch for Graph API endpoints not yet wrapped
 

@@ -40,6 +40,11 @@ POST /ga4/run-report             -> {property_id, dimensions, metrics, date_rang
 GET  /gsc/sites
 POST /gsc/search-analytics       -> {site_url, start_date, end_date, dimensions, ...}
 
+GET  /gtm/accounts
+GET  /gtm/accounts/{id}/containers
+GET  /gtm/accounts/{id}/containers/{cid}/workspaces
+GET  /gtm/workspaces/{id}/{cid}/{wid}/tags
+
 POST /google-ads/query           -> {customer_id, gaql_query, page_size}
 GET  /google-ads/customers
 

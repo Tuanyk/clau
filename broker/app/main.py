@@ -15,7 +15,7 @@ import time
 from fastapi import FastAPI, Request
 
 from app.config import configured_providers
-from app.routes import ga4, google_ads, gsc, meta, passthrough
+from app.routes import ga4, google_ads, gsc, gtm, meta, passthrough
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,5 +49,6 @@ def health():
 app.include_router(meta.router, prefix="/meta", tags=["meta"])
 app.include_router(ga4.router, prefix="/ga4", tags=["ga4"])
 app.include_router(gsc.router, prefix="/gsc", tags=["gsc"])
+app.include_router(gtm.router, prefix="/gtm", tags=["gtm"])
 app.include_router(google_ads.router, prefix="/google-ads", tags=["google-ads"])
 app.include_router(passthrough.router, prefix="/passthrough", tags=["passthrough"])
