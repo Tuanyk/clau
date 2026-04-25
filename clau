@@ -415,6 +415,12 @@ if [ -d /run/clau-secrets ] && [ -n "$(ls -A /run/clau-secrets 2>/dev/null)" ]; 
   echo "─── /run/clau-secrets files ───"
   ls -1 /run/clau-secrets | sed "s/^/  /"
 fi
+if [ -n "$BROKER_URL" ]; then
+  echo "─── API broker (use this for Meta / Google Ads / GA4 / GSC) ───"
+  echo "  $BROKER_URL"
+  echo "  Provider hosts (graph.facebook.com, googleads.googleapis.com, ...) are firewalled off."
+  echo "  Endpoints: GET /health, /docs   POST /meta/insights, /ga4/run-report, /gsc/search-analytics, /google-ads/query"
+fi
 echo ""
 echo "Type: claude, codex, or env | sort for full list"
 '
