@@ -17,8 +17,9 @@ echo "🔥 Setup firewall với allowlist: $ALLOWLIST_FILE"
 # Flush rules cũ
 iptables -F
 iptables -X
-iptables -t nat -F
-iptables -t nat -X
+# Do not flush the nat table. On Docker user-defined networks, Docker's
+# embedded DNS at 127.0.0.11 depends on nat rules inside the container
+# namespace; removing them makes every allowlist lookup resolve to nothing.
 
 # Default DROP
 iptables -P INPUT DROP
