@@ -4,7 +4,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates gnupg git sudo bash \
     iptables ipset bubblewrap dnsutils tcpdump \
-    fzf \
+    fzf ripgrep \
     python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
