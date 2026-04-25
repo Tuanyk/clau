@@ -21,6 +21,15 @@ clau --codex --yolo # open Codex with --dangerously-bypass-approvals-and-sandbox
 clau --no-firewall  # debug mode
 ```
 
+On Linux, `clau` starts the Docker container with
+`--security-opt seccomp=unconfined --security-opt apparmor=unconfined` so
+Codex's bubblewrap sandbox can create its nested namespaces inside Docker. To
+turn those Docker options off for debugging:
+
+```bash
+CLAU_BWRAP_OPTS=0 clau
+```
+
 By default, `clau` maps the first free host port starting at `13000` to port
 `3000` inside the container. Next.js can still listen on `3000`; open the host
 port printed by `clau`, for example `http://localhost:13000`.
@@ -124,13 +133,14 @@ On every `clau` run, the project root's `CLAUDE.md` (Claude Code) and `AGENTS.md
 | Project state | What clau does |
 |---|---|
 | File missing | Copy the full template into the project |
-| File exists, marker present | Skip (already seeded) |
+| File exists, marker present | Skip the full template; backfill the broker section if an older seeded file is missing it |
 | File exists, no marker | Append the template content to the end |
 
 The appended section tells the AI:
 
 - Reference secrets **by name** in code, never print/log/cat their values.
 - The container is firewalled — domains not in `allowlist.txt` will fail.
+- If `BROKER_URL` is set, call the sidecar broker instead of provider APIs directly.
 - pip and `/opt/clau-tools/bin` persist across sessions.
 
 To customize, edit `templates/CLAUDE.md` and `templates/AGENTS.md` in the clau install dir (affects future projects) or the file inside the project (that project only). **Keep the `<!-- clau:seed-v1 -->` marker comment** — deleting it will cause clau to append the section again on the next run. To disable seeding entirely, `export CLAU_SKIP_AUTO_DOCS=1`.

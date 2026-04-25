@@ -67,6 +67,20 @@ if [[ "${CLAU_SKIP_AUTO_DOCS:-0}" != "1" ]]; then
       { printf '\n'; cat "$tpl"; } >> "$dst"
       echo "📝 Appended clau section to existing $doc"
     fi
+
+    # Backfill broker guidance into older seeded files. The seed marker means
+    # we normally avoid rewriting user-edited docs, so append this section only
+    # when the current template has it and the project copy does not.
+    if [[ -e "$dst" ]] \
+      && grep -qF "$SEED_MARKER" "$dst" 2>/dev/null \
+      && ! grep -qF '## API broker (when `BROKER_URL` is set)' "$dst" 2>/dev/null \
+      && grep -qF '## API broker (when `BROKER_URL` is set)' "$tpl" 2>/dev/null; then
+      {
+        printf '\n'
+        sed -n '/^## API broker (when `BROKER_URL` is set)$/,/^## Python \/ tools$/p' "$tpl" | sed '$d'
+      } >> "$dst"
+      echo "📝 Added clau broker section to $doc"
+    fi
   done
 fi
 
@@ -389,6 +403,15 @@ if [[ "$BROKER_ENABLED" -eq 1 ]]; then
   )
 fi
 
+# Codex uses bubblewrap for its command sandbox. Inside Docker on Linux, the
+# default seccomp/AppArmor profile commonly blocks the nested namespace/mount
+# operations before commands run. Relax only those outer Docker profiles so
+# Codex can still apply its own inner sandbox. Set CLAU_BWRAP_OPTS=0 to disable.
+BWRAP_OPTS=()
+if [[ "$(uname)" == "Linux" && "${CLAU_BWRAP_OPTS:-1}" != "0" ]]; then
+  BWRAP_OPTS+=(--security-opt seccomp=unconfined --security-opt apparmor=unconfined)
+fi
+
 if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
   docker rm "$CONTAINER_NAME" &>/dev/null
 fi
@@ -447,6 +470,7 @@ exec docker run -it --rm \
   -e PIP_BREAK_SYSTEM_PACKAGES=1 \
   -e PYTHONUSERBASE=/home/dev/.pip-user \
   "${FIREWALL_OPTS[@]}" \
+  "${BWRAP_OPTS[@]}" \
   "${NETWORK_OPTS[@]}" \
   "${PORT_OPTS[@]}" \
   "${EXTRA_ENV[@]}" \
