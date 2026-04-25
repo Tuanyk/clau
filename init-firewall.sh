@@ -6,6 +6,7 @@ set -euo pipefail
 ALLOWLIST_FILE="${1:-/etc/allowlist.txt}"
 BROKER_IP="${2:-}"
 BROKER_PORT="${3:-}"
+INBOUND_PORTS="${4:-}"
 
 if [[ ! -f "$ALLOWLIST_FILE" ]]; then
   echo "⚠️  Không có allowlist file — skip firewall"
@@ -39,6 +40,19 @@ iptables -A INPUT -p tcp --sport 53 -j ACCEPT
 # Cho phép established connections
 iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Optional explicit inbound ports. Used by the broker sidecar so the paired
+# clau container can call http://broker:8080 while the broker still keeps a
+# default-deny firewall for everything else.
+for port in ${INBOUND_PORTS//,/ }; do
+  [[ -z "$port" ]] && continue
+  if [[ "$port" =~ ^[0-9]+$ ]] && (( 10#$port >= 1 && 10#$port <= 65535 )); then
+    iptables -A INPUT -p tcp --dport "$port" -j ACCEPT
+    echo "📥 Inbound rule: tcp/$port"
+  else
+    echo "⚠️  Skip invalid inbound port: $port"
+  fi
+done
 
 # Tạo ipset cho các IP allowlist
 ipset destroy allowed-domains 2>/dev/null || true

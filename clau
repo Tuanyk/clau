@@ -192,6 +192,8 @@ if [[ -d "$BROKER_DIR" ]]; then
         --network-alias broker \
         --cap-add=NET_ADMIN --cap-add=NET_RAW \
         -e CLAU_FIREWALL=1 \
+        -e "CLAU_INBOUND_PORTS=$BROKER_PORT" \
+        -v "$CONFIG_DIR/broker/entrypoint.sh:/entrypoint.sh:ro" \
         -v "$CONFIG_DIR/init-firewall.sh:/usr/local/bin/init-firewall.sh:ro" \
         -v "$BROKER_DIR:/run/broker-secrets:ro" \
         -v "$BROKER_ALLOW_TMP:/etc/allowlist.txt:ro" \

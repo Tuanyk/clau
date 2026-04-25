@@ -25,6 +25,8 @@ process at startup. `gcp-sa.json` (or `service-account.json` /
 
 The directory is mounted **read-only at `/run/broker-secrets`** in the
 broker container and **never** mounted into the Claude container.
+The broker firewall allows inbound TCP 8080 only from the paired Docker
+network path; provider credentials remain broker-local.
 
 ## Endpoints
 
