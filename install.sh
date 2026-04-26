@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LINK_DIR="$HOME/.local/bin"
 
 echo "📦 Build image: claude-base..."
-docker build \
+DOCKER_BUILDKIT=1 docker build \
   --build-arg USER_UID=$(id -u) \
   --build-arg USER_GID=$(id -g) \
   -t claude-base \
@@ -14,7 +14,7 @@ docker build \
 # Broker sidecar image (holds API creds outside the Claude container).
 # Build context = repo root so the Dockerfile can COPY init-firewall.sh.
 echo "📦 Build image: clau-broker..."
-docker build \
+DOCKER_BUILDKIT=1 docker build \
   -t clau-broker \
   -f "$SCRIPT_DIR/broker/Dockerfile" \
   "$SCRIPT_DIR"

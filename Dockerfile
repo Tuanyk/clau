@@ -1,34 +1,46 @@
+# syntax=docker/dockerfile:1.7
 FROM debian:bookworm-slim
 
+# Keep apt's downloaded .deb files in the BuildKit cache mount.
+# (debian:*-slim ships a docker-clean hook that wipes them otherwise.)
+RUN rm -f /etc/apt/apt.conf.d/docker-clean \
+    && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
+       > /etc/apt/apt.conf.d/keep-cache
+
 # Tools cơ bản + firewall + git tools + python
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates gnupg git sudo bash \
     iptables ipset bubblewrap dnsutils tcpdump \
     fzf ripgrep \
-    python3 python3-pip python3-venv \
-    && rm -rf /var/lib/apt/lists/*
+    python3 python3-pip python3-venv
 
 # Node.js 22 LTS. Debian Bookworm ships Node 18, which is too old for
 # current Next.js releases.
-RUN mkdir -p /etc/apt/keyrings \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
       | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
       > /etc/apt/sources.list.d/nodesource.list \
-    && apt-get update && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get update && apt-get install -y --no-install-recommends nodejs
 
 # GitHub CLI (gh)
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | tee /etc/apt/keyrings/githubcli.gpg > /dev/null \
     && chmod go+r /etc/apt/keyrings/githubcli.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update && apt-get install -y --no-install-recommends gh \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get update && apt-get install -y --no-install-recommends gh
 
 # Delta (git diff đẹp hơn)
-RUN DELTA_VERSION="0.18.2" \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    DELTA_VERSION="0.18.2" \
     && ARCH=$(dpkg --print-architecture) \
     && curl -fsSL "https://github.com/dandavison/delta/releases/download/${DELTA_VERSION}/git-delta_${DELTA_VERSION}_${ARCH}.deb" -o /tmp/delta.deb \
     && apt-get install -y /tmp/delta.deb && rm /tmp/delta.deb
@@ -65,7 +77,8 @@ RUN npm install -g @openai/codex@latest
 #                   line if needed).
 # Then: ./install.sh   (credentials + volumes survive the rebuild)
 
-RUN pip install --break-system-packages --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install --break-system-packages \
         numpy \
         pandas \
         httpx \
@@ -115,6 +128,24 @@ RUN chmod +x /entrypoint.sh /usr/local/bin/init-firewall.sh \
     && chown -R dev:dev /opt/clau-tools \
     && chmod 755 /etc/clau /etc/clau/hooks \
     && chmod 1777 /var/log/clau
+
+# ─── DEV SCRATCHPAD ─────────────────────────────────────────
+# Append one-liners here while iterating. Everything above stays
+# cached, so a rebuild = just the new layer + the entrypoint tail.
+# When a tool proves useful, MOVE it into its proper section
+# above (apt block, pip block, etc.) and DELETE it from here.
+#
+# Each tool gets its OWN RUN line so removing one doesn't bust the
+# others. Templates:
+#   RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+#       --mount=type=cache,target=/var/lib/apt,sharing=locked \
+#       apt-get update && apt-get install -y --no-install-recommends <pkg>
+#   RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+#       pip install --break-system-packages <pkg>
+#   RUN npm install -g <pkg>
+USER root
+# (append RUN lines here)
+# ────────────────────────────────────────────────────────────
 
 USER dev
 WORKDIR /workspace
