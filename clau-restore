@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# clau-restore — list and extract session-start snapshots taken by clau.
+# Snapshots: ~/.clau/snapshots/<project>/<timestamp>.tar.gz
+# Restores : ~/.clau/restored/<project>-<timestamp>/  (NEVER overwrites live project)
+set -euo pipefail
+
+SNAPSHOT_DIR="${CLAU_SNAPSHOT_DIR:-$HOME/.clau/snapshots}"
+RESTORE_DIR="${CLAU_RESTORE_DIR:-$HOME/.clau/restored}"
+
+# Compute PROJECT_NAME the same way clau does (clau:36-46).
+PROJECT_DIR="$(pwd)"
+if [[ -n "${CLAU_PROJECT_NAME:-}" ]]; then
+  raw_name="$CLAU_PROJECT_NAME"
+else
+  raw_name="$(basename "$PROJECT_DIR")"
+fi
+PROJECT_NAME="$(printf '%s' "$raw_name" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+PROJECT_NAME="${PROJECT_NAME##-}"
+PROJECT_NAME="${PROJECT_NAME%%-}"
+
+PROJECT_SNAP_DIR="$SNAPSHOT_DIR/$PROJECT_NAME"
+
+if [[ ! -d "$PROJECT_SNAP_DIR" ]]; then
+  echo "❌ No snapshots for project '$PROJECT_NAME' (looked in $PROJECT_SNAP_DIR)"
+  exit 1
+fi
+
+# List oldest-first so newest gets the highest index (most recent → easiest to recall).
+mapfile -t SNAPSHOTS < <(
+  find "$PROJECT_SNAP_DIR" -maxdepth 1 -type f -name '*.tar.gz' -printf '%T@\t%p\n' 2>/dev/null \
+    | sort -n | cut -f2-
+)
+
+if [[ ${#SNAPSHOTS[@]} -eq 0 ]]; then
+  echo "❌ No snapshots in $PROJECT_SNAP_DIR"
+  exit 1
+fi
+
+if [[ $# -eq 0 ]]; then
+  echo "📁 Project: $PROJECT_NAME"
+  echo "📦 Snapshots in $PROJECT_SNAP_DIR (oldest first):"
+  i=1
+  for snap in "${SNAPSHOTS[@]}"; do
+    base="$(basename "$snap")"
+    size="$(du -h "$snap" 2>/dev/null | awk '{print $1}')"
+    printf "  [%d] %s  (%s)\n" "$i" "$base" "$size"
+    i=$((i + 1))
+  done
+  echo ""
+  echo "Usage: clau-restore <index>"
+  echo "       extracts to $RESTORE_DIR/$PROJECT_NAME-<timestamp>/"
+  exit 0
+fi
+
+idx="$1"
+if [[ ! "$idx" =~ ^[0-9]+$ ]] || (( idx < 1 || idx > ${#SNAPSHOTS[@]} )); then
+  echo "❌ Invalid index: $idx (have 1..${#SNAPSHOTS[@]})"
+  exit 1
+fi
+
+snap="${SNAPSHOTS[$((idx - 1))]}"
+base="$(basename "$snap" .tar.gz)"
+dest="$RESTORE_DIR/$PROJECT_NAME-$base"
+
+if [[ -e "$dest" ]]; then
+  echo "❌ Restore target already exists: $dest"
+  echo "   Move or delete it, then retry."
+  exit 1
+fi
+
+mkdir -p "$dest"
+echo "📦 Extracting $snap"
+echo "      → $dest"
+tar -xzf "$snap" -C "$dest"
+echo "✓ Restored. Compare against the live project with:"
+echo "   diff -r $PROJECT_DIR $dest"

@@ -21,11 +21,13 @@ DOCKER_BUILDKIT=1 docker build \
 
 mkdir -p "$LINK_DIR" "$SCRIPT_DIR/secrets" "$SCRIPT_DIR/allowlists"
 chmod +x "$SCRIPT_DIR/clau" "$SCRIPT_DIR/clau-login" "$SCRIPT_DIR/codex-login" \
+         "$SCRIPT_DIR/clau-restore" \
          "$SCRIPT_DIR/entrypoint.sh" "$SCRIPT_DIR/init-firewall.sh" \
          "$SCRIPT_DIR/broker/entrypoint.sh"
 ln -sf "$SCRIPT_DIR/clau" "$LINK_DIR/clau"
 ln -sf "$SCRIPT_DIR/clau-login" "$LINK_DIR/clau-login"
 ln -sf "$SCRIPT_DIR/codex-login" "$LINK_DIR/codex-login"
+ln -sf "$SCRIPT_DIR/clau-restore" "$LINK_DIR/clau-restore"
 
 if [[ ":$PATH:" != *":$LINK_DIR:"* ]]; then
   echo ""

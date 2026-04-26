@@ -92,6 +92,88 @@ if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
   exec docker exec -it "$CONTAINER_NAME" bash
 fi
 
+# ─── Snapshot working dir (recovery if AI nukes things) ─────
+# Tar the project into ~/.clau/snapshots/<project>/<UTC-timestamp>.tar.gz
+# before launching a fresh container. Lives outside the bind mount so the
+# container can't reach it. Restore via: clau-restore
+# Defaults: keep last 3, prune anything older than 3 days.
+# Tunables:
+#   CLAU_SKIP_SNAPSHOT=1      disable for this run
+#   CLAU_SNAPSHOT_KEEP=N      max snapshots per project (default 3)
+#   CLAU_SNAPSHOT_TTL_DAYS=N  auto-prune age (default 3)
+#   CLAU_SNAPSHOT_DIR=/path   override storage root (default ~/.clau/snapshots)
+clau_snapshot() {
+  local snap_root="${CLAU_SNAPSHOT_DIR:-$HOME/.clau/snapshots}"
+  local keep="${CLAU_SNAPSHOT_KEEP:-3}"
+  local ttl_days="${CLAU_SNAPSHOT_TTL_DAYS:-3}"
+  local proj_snap_dir="$snap_root/$PROJECT_NAME"
+  local ts out
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  out="$proj_snap_dir/$ts.tar.gz"
+
+  mkdir -p "$proj_snap_dir" 2>/dev/null || {
+    echo "⚠️  Cannot create $proj_snap_dir; skipping snapshot."
+    return 0
+  }
+
+  # Default excludes: reproducible build artifacts. Keeps tarballs small.
+  local -a excludes=(
+    --exclude=./node_modules
+    --exclude=./.venv
+    --exclude=./venv
+    --exclude=./__pycache__
+    --exclude=*.pyc
+    --exclude=./dist
+    --exclude=./build
+    --exclude=./.next
+    --exclude=./target
+    --exclude=./.cache
+    --exclude=./.clau-restored-*
+  )
+
+  # Per-project additions via .clau-snapshot-ignore (gitignore-style, one pattern/line).
+  local extra="$PROJECT_DIR/.clau-snapshot-ignore"
+  if [[ -f "$extra" ]]; then
+    while IFS= read -r line; do
+      [[ -z "$line" || "$line" =~ ^# ]] && continue
+      excludes+=(--exclude="$line")
+    done < "$extra"
+  fi
+
+  local rc=0
+  tar -czf "$out" -C "$PROJECT_DIR" "${excludes[@]}" . 2>/dev/null || rc=$?
+  # tar exit 1 = "some files differed during read" (e.g. .git/index.lock churn) — accept.
+  # tar exit ≥2 = fatal.
+  if (( rc > 1 )); then
+    rm -f "$out" 2>/dev/null || true
+    echo "⚠️  Snapshot failed (tar exit $rc); continuing without backup."
+    return 0
+  fi
+
+  local size
+  size="$(du -h "$out" 2>/dev/null | awk '{print $1}')"
+  echo "📦 Snapshot: $out ($size)"
+
+  # Prune by TTL.
+  find "$proj_snap_dir" -maxdepth 1 -type f -name '*.tar.gz' \
+    -mtime +"$ttl_days" -delete 2>/dev/null || true
+
+  # Cap to $keep newest.
+  local n
+  n="$(find "$proj_snap_dir" -maxdepth 1 -type f -name '*.tar.gz' 2>/dev/null | wc -l)"
+  if (( n > keep )); then
+    find "$proj_snap_dir" -maxdepth 1 -type f -name '*.tar.gz' -printf '%T@\t%p\n' 2>/dev/null \
+      | sort -n | head -n $((n - keep)) | cut -f2- \
+      | xargs -r rm -f 2>/dev/null || true
+  fi
+}
+
+if [[ "${CLAU_SKIP_SNAPSHOT:-0}" != "1" ]] \
+  && [[ -d "$PROJECT_DIR" ]] \
+  && [[ -n "$(ls -A "$PROJECT_DIR" 2>/dev/null)" ]]; then
+  clau_snapshot
+fi
+
 # ─── Check image & auth ─────────────────────────────────────
 if ! docker image inspect "$IMAGE" &>/dev/null; then
   echo "❌ Image chưa có. Chạy: $CONFIG_DIR/install.sh"; exit 1

@@ -5,7 +5,7 @@ Run Claude Code and OpenAI Codex inside a Docker container. Per-project firewall
 ## Install
 
 ```bash
-./install.sh        # builds the image, symlinks `clau`, `clau-login`, `codex-login`
+./install.sh        # builds the image, symlinks `clau`, `clau-login`, `codex-login`, `clau-restore`
 clau-login          # one-time Claude OAuth login (stored in `claude-auth`)
 codex-login         # one-time Codex ChatGPT login (stored in `codex-auth`)
 ```
@@ -69,6 +69,38 @@ Codex models can differ by auth mode and rollout. `gpt-5.5` is available in
 Codex only when it appears for the signed-in ChatGPT account; API-key auth
 does not expose it. If it does not appear yet, use `gpt-5.4` and rebuild later
 with `./install.sh` to pick up the newest Codex CLI.
+
+## Snapshots and recovery
+
+The project directory is bind-mounted live into the container, so anything the AI deletes or overwrites hits host disk immediately. To make accidents recoverable, every fresh `clau` run tars the working directory into a host-side snapshot **before** starting the container.
+
+```text
+~/.clau/snapshots/<project>/<UTC-timestamp>.tar.gz
+```
+
+Defaults: keep the **3 most recent** snapshots per project, auto-prune anything **older than 3 days**. The snapshot dir lives outside any bind mount, so a runaway agent inside the container cannot reach it.
+
+Default excludes (reproducible from package files): `node_modules/`, `.venv/`, `venv/`, `__pycache__/`, `*.pyc`, `dist/`, `build/`, `.next/`, `target/`, `.cache/`. Drop a `.clau-snapshot-ignore` file in the project root (gitignore-style, one pattern per line) to add more.
+
+Snapshots are taken only on a fresh container start — `clau` re-attaching to a running container skips the snapshot.
+
+To list / restore:
+
+```bash
+clau-restore           # list snapshots for the cwd's project
+clau-restore 2         # extract snapshot #2 to ~/.clau/restored/<project>-<timestamp>/
+```
+
+`clau-restore` never overwrites the live project — it extracts to a sibling dir under `~/.clau/restored/` so you can `diff -r` and copy back what you need.
+
+Tunables (env vars):
+
+```bash
+CLAU_SKIP_SNAPSHOT=1 clau          # disable for this run (huge repos / CI)
+CLAU_SNAPSHOT_KEEP=5 clau          # keep last 5 instead of 3
+CLAU_SNAPSHOT_TTL_DAYS=7 clau      # prune after 7 days instead of 3
+CLAU_SNAPSHOT_DIR=/mnt/backup/clau # store somewhere other than ~/.clau/snapshots
+```
 
 ## Secrets / API keys / credentials
 
