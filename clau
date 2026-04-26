@@ -117,18 +117,19 @@ clau_snapshot() {
   }
 
   # Default excludes: reproducible build artifacts. Keeps tarballs small.
+  # Glob patterns are single-quoted so bash doesn't expand them against cwd.
   local -a excludes=(
-    --exclude=./node_modules
-    --exclude=./.venv
-    --exclude=./venv
-    --exclude=./__pycache__
-    --exclude=*.pyc
-    --exclude=./dist
-    --exclude=./build
-    --exclude=./.next
-    --exclude=./target
-    --exclude=./.cache
-    --exclude=./.clau-restored-*
+    '--exclude=./node_modules'
+    '--exclude=./.venv'
+    '--exclude=./venv'
+    '--exclude=./__pycache__'
+    '--exclude=*.pyc'
+    '--exclude=./dist'
+    '--exclude=./build'
+    '--exclude=./.next'
+    '--exclude=./target'
+    '--exclude=./.cache'
+    '--exclude=./.clau-restored-*'
   )
 
   # Per-project additions via .clau-snapshot-ignore (gitignore-style, one pattern/line).
@@ -140,19 +141,43 @@ clau_snapshot() {
     done < "$extra"
   fi
 
-  local rc=0
-  tar -czf "$out" -C "$PROJECT_DIR" "${excludes[@]}" . 2>/dev/null || rc=$?
-  # tar exit 1 = "some files differed during read" (e.g. .git/index.lock churn) — accept.
-  # tar exit ≥2 = fatal.
+  # --ignore-failed-read: skip files we can't read (e.g. mysql/postgres data dirs
+  # owned by container UIDs) and keep the snapshot. Unreadable files aren't
+  # recoverable via host tools anyway, so a partial snapshot beats none.
+  local rc=0 err_log
+  err_log="$(mktemp 2>/dev/null || echo /tmp/clau-tar-err.$$)"
+  tar --ignore-failed-read -czf "$out" -C "$PROJECT_DIR" "${excludes[@]}" . 2>"$err_log" || rc=$?
+  # tar exit 1 = "some files differed during read" (.git churn) — accept.
+  # tar exit ≥2 = fatal (disk full, bad path, etc.).
   if (( rc > 1 )); then
     rm -f "$out" 2>/dev/null || true
     echo "⚠️  Snapshot failed (tar exit $rc); continuing without backup."
+    if [[ -s "$err_log" ]]; then
+      echo "   tar stderr (first 5 lines):"
+      head -5 "$err_log" 2>/dev/null | sed 's/^/     /'
+      echo "   Full log: $err_log"
+      echo "   To skip the snapshot for this run: CLAU_SKIP_SNAPSHOT=1 clau"
+    else
+      rm -f "$err_log" 2>/dev/null || true
+    fi
     return 0
   fi
 
   local size
   size="$(du -h "$out" 2>/dev/null | awk '{print $1}')"
   echo "📦 Snapshot: $out ($size)"
+
+  # If tar warned about unreadable files, surface a short note so the user
+  # can add them to .clau-snapshot-ignore and silence future runs.
+  if [[ -s "$err_log" ]]; then
+    local skipped=0
+    skipped="$(grep -c 'Permission denied' "$err_log" 2>/dev/null || true)"
+    [[ "$skipped" =~ ^[0-9]+$ ]] || skipped=0
+    if (( skipped > 0 )); then
+      echo "   ($skipped path(s) skipped — permission denied; add to .clau-snapshot-ignore to silence)"
+    fi
+  fi
+  rm -f "$err_log" 2>/dev/null || true
 
   # Prune by TTL.
   find "$proj_snap_dir" -maxdepth 1 -type f -name '*.tar.gz' \
