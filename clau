@@ -254,6 +254,50 @@ PROJECT_FILE_SECRETS="$SECRETS_DIR/$PROJECT_NAME"
 [[ -f "$PROJECT_FILE_SECRETS/.env" ]]     && ENV_FILES+=(--env-file "$PROJECT_FILE_SECRETS/.env")
 [[ -f "$PROJECT_DIR/.env" ]]              && ENV_FILES+=(--env-file "$PROJECT_DIR/.env")
 
+# ─── Port helpers (used by broker dashboard and dev-server forwarding) ──
+reserved_host_ports=()
+
+host_port_is_reserved() {
+  local port="$1"
+  local reserved
+  for reserved in "${reserved_host_ports[@]}"; do
+    [[ "$reserved" == "$port" ]] && return 0
+  done
+  return 1
+}
+
+valid_tcp_port() {
+  local port="$1"
+  [[ "$port" =~ ^[0-9]+$ ]] && (( 10#$port >= 1 && 10#$port <= 65535 ))
+}
+
+host_port_is_available() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    [[ -z "$(ss -H -ltn "sport = :$port" 2>/dev/null)" ]]
+  elif command -v lsof >/dev/null 2>&1; then
+    ! lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+  else
+    ! (: >"/dev/tcp/127.0.0.1/$port") >/dev/null 2>&1
+  fi
+}
+
+find_available_host_port() {
+  local start="$1"
+  local limit="$2"
+  local end=$((start + limit))
+  local port="$start"
+  (( end > 65535 )) && end=65535
+  while (( port <= end )); do
+    if ! host_port_is_reserved "$port" && host_port_is_available "$port"; then
+      printf '%s\n' "$port"
+      return 0
+    fi
+    port=$((port + 1))
+  done
+  return 1
+}
+
 # ─── Sidecar broker (per-project) ───────────────────────────
 # Nếu secrets/<project>/broker/ tồn tại thì project ở "brokered mode":
 #   - Spin up broker-<project> container giữ API creds (Meta token, GA SA,
@@ -295,11 +339,25 @@ if [[ -d "$BROKER_DIR" ]]; then
     if ! docker ps --format '{{.Names}}' | grep -q "^${BROKER_NAME}$"; then
       # Stop any stale stopped container with the same name.
       docker rm -f "$BROKER_NAME" &>/dev/null || true
+
+      # Publish the broker on a host port so the user can open /dashboard in
+      # their browser. Bind to 127.0.0.1 only — broker bodies contain ad
+      # account data and shouldn't be exposed to the LAN.
+      DASHBOARD_BASE_PORT="${CLAU_BROKER_DASHBOARD_PORT:-19000}"
+      DASHBOARD_PUBLISH=()
+      if dashboard_host_port="$(find_available_host_port "$DASHBOARD_BASE_PORT" "$CLAU_PORT_SCAN_LIMIT")"; then
+        DASHBOARD_PUBLISH=(-p "127.0.0.1:$dashboard_host_port:$BROKER_PORT")
+        reserved_host_ports+=("$dashboard_host_port")
+      else
+        echo "⚠️  No free host port for broker dashboard near $DASHBOARD_BASE_PORT — dashboard will only be reachable from inside the docker network"
+      fi
+
       docker run -d \
         --name "$BROKER_NAME" \
         --network "$BROKER_NETWORK" \
         --network-alias broker \
         --cap-add=NET_ADMIN --cap-add=NET_RAW \
+        "${DASHBOARD_PUBLISH[@]}" \
         -e CLAU_FIREWALL=1 \
         -e "CLAU_INBOUND_PORTS=$BROKER_PORT" \
         -v "$CONFIG_DIR/broker/entrypoint.sh:/entrypoint.sh:ro" \
@@ -354,6 +412,13 @@ if [[ -d "$BROKER_DIR" ]]; then
     else
       BROKER_ENABLED=1
       echo "🤝 Broker: $BROKER_NAME ($BROKER_IP:$BROKER_PORT) on $BROKER_NETWORK"
+      # Pre-existing brokers were started before the dashboard was published;
+      # `docker port` returns nothing for them and the user gets no URL until
+      # they recreate the container with `docker rm -f`.
+      DASHBOARD_HOST_BIND="$(docker port "$BROKER_NAME" "$BROKER_PORT" 2>/dev/null | head -1)"
+      if [[ -n "$DASHBOARD_HOST_BIND" ]]; then
+        echo "📊 Dashboard: http://${DASHBOARD_HOST_BIND/0.0.0.0/127.0.0.1}/dashboard"
+      fi
     fi
   fi
 fi
@@ -384,48 +449,6 @@ CLAU_PORT_SCAN_LIMIT="${CLAU_PORT_SCAN_LIMIT:-200}"
 CLAU_PORTS_RAW="${CLAU_PORTS-auto:$CLAU_DEFAULT_CONTAINER_PORT}"
 PORT_OPTS=()
 exposed_ports=()
-reserved_host_ports=()
-
-host_port_is_reserved() {
-  local port="$1"
-  local reserved
-  for reserved in "${reserved_host_ports[@]}"; do
-    [[ "$reserved" == "$port" ]] && return 0
-  done
-  return 1
-}
-
-valid_tcp_port() {
-  local port="$1"
-  [[ "$port" =~ ^[0-9]+$ ]] && (( 10#$port >= 1 && 10#$port <= 65535 ))
-}
-
-host_port_is_available() {
-  local port="$1"
-  if command -v ss >/dev/null 2>&1; then
-    [[ -z "$(ss -H -ltn "sport = :$port" 2>/dev/null)" ]]
-  elif command -v lsof >/dev/null 2>&1; then
-    ! lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
-  else
-    ! (: >"/dev/tcp/127.0.0.1/$port") >/dev/null 2>&1
-  fi
-}
-
-find_available_host_port() {
-  local start="$1"
-  local limit="$2"
-  local end=$((start + limit))
-  local port="$start"
-  (( end > 65535 )) && end=65535
-  while (( port <= end )); do
-    if ! host_port_is_reserved "$port" && host_port_is_available "$port"; then
-      printf '%s\n' "$port"
-      return 0
-    fi
-    port=$((port + 1))
-  done
-  return 1
-}
 
 if ! valid_tcp_port "$CLAU_DEFAULT_HOST_PORT" || ! valid_tcp_port "$CLAU_DEFAULT_CONTAINER_PORT" || [[ ! "$CLAU_PORT_SCAN_LIMIT" =~ ^[0-9]+$ ]]; then
   echo "❌ CLAU_DEFAULT_HOST_PORT/CLAU_DEFAULT_CONTAINER_PORT phải là TCP port hợp lệ; CLAU_PORT_SCAN_LIMIT phải là số"
