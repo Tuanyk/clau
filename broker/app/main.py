@@ -4,46 +4,41 @@ Holds long-lived API credentials so they never enter the Claude container.
 Claude calls these endpoints over plain HTTP without auth; the broker injects
 provider-side credentials and forwards to Meta / Google.
 
-Logging: method, path, status, duration only. We never log request or
-response bodies — they may contain PII or credential-equivalent data.
+Per-request bodies are logged to a JSONL file and rendered at /dashboard so
+the user can audit exactly what the agent is sending. See `request_log.py`.
 """
 from __future__ import annotations
 
 import logging
-import time
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 
 from app.config import configured_providers
+from app.request_log import LOG_FILE, render_dashboard, request_log_middleware
 from app.routes import ga4, google_ads, gsc, gtm, meta, passthrough
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
 )
-log = logging.getLogger("broker")
 
 app = FastAPI(title="clau-broker", docs_url="/docs", redoc_url=None)
-
-
-@app.middleware("http")
-async def access_log(request: Request, call_next):
-    start = time.perf_counter()
-    response = await call_next(request)
-    elapsed_ms = (time.perf_counter() - start) * 1000
-    log.info(
-        "%s %s -> %d (%.0fms)",
-        request.method,
-        request.url.path,
-        response.status_code,
-        elapsed_ms,
-    )
-    return response
+app.middleware("http")(request_log_middleware)
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "providers": configured_providers()}
+    return {
+        "ok": True,
+        "providers": configured_providers(),
+        "log": str(LOG_FILE),
+        "dashboard": "/dashboard",
+    }
+
+
+@app.get("/dashboard")
+def dashboard():
+    return render_dashboard()
 
 
 app.include_router(meta.router, prefix="/meta", tags=["meta"])

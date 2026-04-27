@@ -22,6 +22,9 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY broker/app /app/app
 
+# Per-request log file written by app.request_log; surfaced at /dashboard.
+RUN mkdir -p /var/log/broker && chown broker:broker /var/log/broker
+
 USER broker
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
