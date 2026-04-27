@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates gnupg git sudo bash \
-    iptables ipset bubblewrap dnsutils tcpdump \
+    iptables ipset bubblewrap dnsutils dnsmasq-base tcpdump \
     fzf ripgrep \
     python3 python3-pip python3-venv
 
@@ -145,6 +145,34 @@ RUN chmod +x /entrypoint.sh /usr/local/bin/init-firewall.sh \
 #   RUN npm install -g <pkg>
 USER root
 # (append RUN lines here)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends imagemagick
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends ffmpeg
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install --break-system-packages Pillow
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends jq
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends pandoc
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends tesseract-ocr
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends poppler-utils
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends libimage-exiftool-perl
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends sqlite3
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install --break-system-packages yq
 # ────────────────────────────────────────────────────────────
 
 USER dev

@@ -4,7 +4,7 @@
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl ca-certificates iptables ipset dnsutils sudo \
+        curl ca-certificates iptables ipset dnsutils dnsmasq-base sudo \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root broker user. Sudo only for init-firewall.sh.
