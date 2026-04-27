@@ -48,13 +48,13 @@ CLAU_PORTS="" clau                 # no forwarded ports
 📁 Project: my-app  (/home/you/work/my-app)
 ```
 
-The project name is the lowercased basename of the cwd — so `~/work/my-app` and `~/personal/my-app` share `secrets/`, `allowlists/`, container, and history. To disambiguate, override with `CLAU_PROJECT_NAME`:
+The project name is the lowercased basename of the cwd — so `~/work/my-app` and `~/personal/my-app` share `~/.clau/secrets/`, `~/.clau/allowlists/`, container, and history. To disambiguate, override with `CLAU_PROJECT_NAME`:
 
 ```bash
 cd ~/personal/my-app && CLAU_PROJECT_NAME=my-app-personal clau
 ```
 
-Then `secrets/my-app-personal/`, `allowlists/my-app-personal.txt`, container `clau-my-app-personal`, etc.
+Then `~/.clau/secrets/my-app-personal/`, `~/.clau/allowlists/my-app-personal.txt`, container `clau-my-app-personal`, etc.
 
 Claude and Codex credentials are intentionally separate:
 
@@ -104,10 +104,12 @@ CLAU_SNAPSHOT_DIR=/mnt/backup/clau # store somewhere other than ~/.clau/snapshot
 
 ## Secrets / API keys / credentials
 
+> **Where they live**: `~/.clau/secrets/<project>/` on the host (outside the clau repo, so opening the clau project in any editor / agent doesn't expose them). Override with `CLAU_SECRETS_DIR=/some/path clau`. For backward compat, an in-tree `secrets/` directory is still picked up if it exists.
+
 ### Recommended layout: one directory per project
 
 ```text
-secrets/
+~/.clau/secrets/
   my-app/
     .env          # API keys, connection strings — key=value
     gcp.json      # service account JSON
@@ -115,15 +117,15 @@ secrets/
     kubeconfig    # K8s config
 ```
 
-`<project-name>` is the lowercased basename of your project dir (`~/work/my-app` → `my-app`). The `secrets/` root is gitignored.
+`<project-name>` is the lowercased basename of your project dir (`~/work/my-app` → `my-app`). The `~/.clau/secrets/` root lives outside any git repo — never enters version control.
 
 On every `clau` run, for project `my-app`:
 
-1. `secrets/my-app/.env` is loaded into the container as env vars (`APP_API_KEY=sk-...` etc.).
-2. `secrets/my-app/` is mounted read-only at `/run/clau-secrets/` in the container.
+1. `~/.clau/secrets/my-app/.env` is loaded into the container as env vars (`APP_API_KEY=sk-...` etc.).
+2. `~/.clau/secrets/my-app/` is mounted read-only at `/run/clau-secrets/` in the container.
 3. **Every file in that dir (except `.env`) gets its path auto-injected as an env var** — uppercase, non-alphanumerics become `_`:
 
-   | File in `secrets/my-app/` | Auto-injected env var |
+   | File in `~/.clau/secrets/my-app/` | Auto-injected env var |
    |---|---|
    | `gcp.json` | `GCP_JSON=/run/clau-secrets/gcp.json` **and** `GOOGLE_APPLICATION_CREDENTIALS=/run/clau-secrets/gcp.json` |
    | `kubeconfig` | `KUBECONFIG=/run/clau-secrets/kubeconfig` |
@@ -134,7 +136,7 @@ On every `clau` run, for project `my-app`:
 
 On entry you'll see a line like:
 ```
-🔑 File secrets: .../secrets/my-app → /run/clau-secrets (ro)
+🔑 File secrets: /home/you/.clau/secrets/my-app → /run/clau-secrets (ro)
    Injected env vars: GCP_JSON GOOGLE_APPLICATION_CREDENTIALS KUBECONFIG
 ```
 
@@ -142,10 +144,10 @@ On entry you'll see a line like:
 
 Earlier clau versions used two separate paths — they both still work and are loaded in addition to the directory layout:
 
-- `secrets/<project-name>.env` — env vars only (flat file)
+- `~/.clau/secrets/<project-name>.env` — env vars only (flat file)
 - `<project>/.env` — the project's own `.env` in its root (auto-mounted)
 
-If multiple are present, load order is: `secrets/<project>.env` → `secrets/<project>/.env` → `<project>/.env` → `-e` injected vars. Later values win on conflicts, so the project's own `.env` has the final say.
+If multiple are present, load order is: `~/.clau/secrets/<project>.env` → `~/.clau/secrets/<project>/.env` → `<project>/.env` → `-e` injected vars. Later values win on conflicts, so the project's own `.env` has the final say.
 
 ### What the AI can do with credential files
 
@@ -156,7 +158,7 @@ Treat the values as opaque; the path/name is the only thing the AI should touch.
 
 ### Alternative: credentials inside the project
 
-If you'd rather keep credentials inside the project (at a gitignored path like `.secrets/gcp.json`) than in clau's `secrets/`, that works too — the project is mounted at the same absolute path inside the container as on the host. Set `GOOGLE_APPLICATION_CREDENTIALS=/home/me/work/my-app/.secrets/gcp.json` in the project `.env`. Useful when credentials are shared with host tooling that also reads from the same spot.
+If you'd rather keep credentials inside the project (at a gitignored path like `.secrets/gcp.json`) than in `~/.clau/secrets/`, that works too — the project is mounted at the same absolute path inside the container as on the host. Set `GOOGLE_APPLICATION_CREDENTIALS=/home/me/work/my-app/.secrets/gcp.json` in the project `.env`. Useful when credentials are shared with host tooling that also reads from the same spot.
 
 ## Auto-seeded AI instructions (`CLAUDE.md` / `AGENTS.md`)
 
@@ -226,8 +228,8 @@ defense-in-depth layers below are *not enough*. Anything that lives in
 Claude's address space can theoretically be encoded and exfiltrated. The
 broker sidecar moves those secrets out of Claude's container entirely.
 
-**How it works.** Drop credentials under `secrets/<project>/broker/`
-instead of `secrets/<project>/`. On `clau` start:
+**How it works.** Drop credentials under `~/.clau/secrets/<project>/broker/`
+instead of `~/.clau/secrets/<project>/`. On `clau` start:
 
 1. A `broker-<project>` container comes up on a private docker network
    (`clau-net-<project>`) and reads creds from `/run/broker-secrets/`.
@@ -235,14 +237,14 @@ instead of `secrets/<project>/`. On `clau` start:
    It does **not** receive the API keys themselves.
 3. Claude's firewall removes Meta / Google Ads / Analytics / Search
    Console hosts; only the broker IP and the standard dev hosts are
-   reachable. The broker has its own firewall (`allowlists/broker.txt`)
+   reachable. The broker has its own firewall (`~/.clau/allowlists/broker.txt`)
    that allows only the provider APIs.
 4. Claude calls `POST http://broker:8080/meta/insights` etc. The broker
    injects the access token, talks to graph.facebook.com, returns the
    JSON. The token never appears in any tool result.
 
 ```
-secrets/
+~/.clau/secrets/
   client-foo/
     .env              # ← visible to Claude (DB url, app secrets)
     broker/           # ← visible to broker only
@@ -270,7 +272,7 @@ POST /google-ads/query           {customer_id, gaql_query}
 ANY  /passthrough/meta/<path>    arbitrary Graph API call
 ```
 
-**Opt-in**: if `secrets/<project>/broker/` doesn't exist, nothing
+**Opt-in**: if `~/.clau/secrets/<project>/broker/` doesn't exist, nothing
 changes — the broker isn't started, behavior is identical to before.
 
 **Lifecycle**: the broker container stays up after `clau` exits so
@@ -294,7 +296,7 @@ To tune the rules, edit `hooks/secrets-guard.py` (host side); changes take effec
 ## Firewall allowlist
 
 - Default: `allowlist.txt` (clau install root)
-- Per-project override: `allowlists/<project-name>.txt`
+- Per-project override: `~/.clau/allowlists/<project-name>.txt` (override location with `CLAU_ALLOWLISTS_DIR`)
 
 One domain per line. The container can only reach hosts on the allowlist (plus DNS).
 

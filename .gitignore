@@ -1,10 +1,10 @@
-secrets/*.env
-secrets/*
-!secrets/.gitkeep
+# secrets/ and allowlists/ now live at ~/.clau/{secrets,allowlists}/
+# These rules stay as defense-in-depth in case anything ends up in-tree.
+secrets/
+allowlists/
 .codex
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 *.log
-allowlists/*

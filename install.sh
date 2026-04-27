@@ -19,7 +19,7 @@ DOCKER_BUILDKIT=1 docker build \
   -f "$SCRIPT_DIR/broker/Dockerfile" \
   "$SCRIPT_DIR"
 
-mkdir -p "$LINK_DIR" "$SCRIPT_DIR/secrets" "$SCRIPT_DIR/allowlists"
+mkdir -p "$LINK_DIR" "$HOME/.clau/secrets" "$HOME/.clau/allowlists"
 chmod +x "$SCRIPT_DIR/clau" "$SCRIPT_DIR/clau-login" "$SCRIPT_DIR/codex-login" \
          "$SCRIPT_DIR/clau-restore" \
          "$SCRIPT_DIR/entrypoint.sh" "$SCRIPT_DIR/init-firewall.sh" \
@@ -47,5 +47,7 @@ cat <<EOF
    7. clau --no-firewall          # tắt firewall (debug)
 
 Allowlist mặc định: $SCRIPT_DIR/allowlist.txt
-Override theo dự án: $SCRIPT_DIR/allowlists/<ten-du-an>.txt
+Override theo dự án: $HOME/.clau/allowlists/<ten-du-an>.txt
+Secrets per-project:  $HOME/.clau/secrets/<ten-du-an>/   (.env + credential files)
+Override paths:       CLAU_SECRETS_DIR / CLAU_ALLOWLISTS_DIR
 EOF

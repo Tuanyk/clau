@@ -12,7 +12,7 @@ If you need to know which env vars are available, ask the user — do not enumer
 
 ## Network
 
-This project runs inside a Docker container with a firewall allowlist. Outbound HTTPS only reaches hosts in `allowlist.txt` (in the clau install dir) or `allowlists/<project>.txt`. If a request fails with "connection refused" / "no route to host", the domain likely needs adding to the allowlist.
+This project runs inside a Docker container with a firewall allowlist. Outbound HTTPS only reaches hosts in `allowlist.txt` (in the clau install dir) or `~/.clau/allowlists/<project>.txt` on the host. If a request fails with "connection refused" / "no route to host", the domain likely needs adding to the allowlist.
 
 ## API broker (when `BROKER_URL` is set)
 
@@ -30,7 +30,7 @@ If `BROKER_URL` is in your environment, this container does **not** hold third-p
 
 Do NOT call provider hosts directly (`graph.facebook.com`, `googleads.googleapis.com`, `analyticsdata.googleapis.com`, `searchconsole.googleapis.com`) — the firewall blocks them. The broker injects auth and forwards on your behalf, so the actual access tokens never enter this container.
 
-If a provider returns 503 from the broker, its credentials aren't configured for this project — ask the user to add them under `secrets/<project>/broker/`.
+If a provider returns 503 from the broker, its credentials aren't configured for this project — ask the user to add them under `~/.clau/secrets/<project>/broker/` on the host.
 
 ## Python / tools
 
