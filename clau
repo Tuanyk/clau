@@ -449,6 +449,7 @@ CLAU_PORT_SCAN_LIMIT="${CLAU_PORT_SCAN_LIMIT:-200}"
 CLAU_PORTS_RAW="${CLAU_PORTS-auto:$CLAU_DEFAULT_CONTAINER_PORT}"
 PORT_OPTS=()
 exposed_ports=()
+inbound_ports=()
 
 if ! valid_tcp_port "$CLAU_DEFAULT_HOST_PORT" || ! valid_tcp_port "$CLAU_DEFAULT_CONTAINER_PORT" || [[ ! "$CLAU_PORT_SCAN_LIMIT" =~ ^[0-9]+$ ]]; then
   echo "❌ CLAU_DEFAULT_HOST_PORT/CLAU_DEFAULT_CONTAINER_PORT phải là TCP port hợp lệ; CLAU_PORT_SCAN_LIMIT phải là số"
@@ -491,6 +492,7 @@ for port_spec in ${CLAU_PORTS_RAW//,/ }; do
   PORT_OPTS+=(-p "127.0.0.1:${host_port}:${container_port}")
   reserved_host_ports+=("$host_port")
   exposed_ports+=("localhost:$host_port->$container_port")
+  inbound_ports+=("$container_port")
 done
 [[ ${#exposed_ports[@]} -gt 0 ]] && echo "🌐 Ports: ${exposed_ports[*]} (host->container)"
 
@@ -539,6 +541,9 @@ fi
 [[ -f "$SETTINGS_FILE" ]] && MOUNTS+=(-v "$SETTINGS_FILE:/etc/claude-code/managed-settings.json:ro")
 [[ -d "$HOOKS_DIR" ]] && MOUNTS+=(-v "$HOOKS_DIR:/etc/clau/hooks:ro")
 [[ -f "$CONFIG_DIR/init-firewall.sh" ]] && MOUNTS+=(-v "$CONFIG_DIR/init-firewall.sh:/usr/local/bin/init-firewall.sh:ro")
+# Bind-mount entrypoint.sh so edits take effect without rebuilding the image
+# (matches the init-firewall.sh pattern above).
+[[ -f "$CONFIG_DIR/entrypoint.sh" ]] && MOUNTS+=(-v "$CONFIG_DIR/entrypoint.sh:/entrypoint.sh:ro")
 
 # Mount allowlist nếu có và firewall không bị disable
 FIREWALL_OPTS=()
@@ -548,6 +553,12 @@ if [[ -n "$ALLOWLIST_TO_USE" && "$NO_FIREWALL" -eq 0 ]]; then
     --cap-add=NET_ADMIN --cap-add=NET_RAW
     -e CLAU_FIREWALL=1
   )
+  # Open INPUT for the container ports we just published, otherwise the
+  # firewall's default-DROP swallows inbound from the docker bridge and
+  # `localhost:<host_port>` times out.
+  if (( ${#inbound_ports[@]} > 0 )); then
+    FIREWALL_OPTS+=(-e "CLAU_INBOUND_PORTS=$(IFS=,; echo "${inbound_ports[*]}")")
+  fi
 elif [[ "$NO_FIREWALL" -eq 1 ]]; then
   echo "⚠️  Firewall disabled (--no-firewall) — DNS log: ~/.history-store/traffic.log"
   FIREWALL_OPTS+=(

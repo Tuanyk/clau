@@ -27,6 +27,60 @@ files.pythonhosted.org
 deb.debian.org
 security.debian.org
 
+# Google Fonts (next/font/google, @fontsource, plain <link> in CSS).
+# CSS from fonts.googleapis.com, woff2 binaries from fonts.gstatic.com.
+fonts.googleapis.com
+fonts.gstatic.com
+
+# YouTube embeds + next/image optimization (server fetches these before
+# serving to the browser, so the container needs outbound).
+www.youtube.com
+img.youtube.com
+i.ytimg.com
+
+# Analytics / tag managers. Mostly loaded by the browser, not the container —
+# included here in case of SSR-side fetches (gtag SSR, server-side Pixel, etc).
+www.googletagmanager.com
+connect.facebook.net
+www.clarity.ms
+
+# Firebase Auth + Storage (server SDK paths).
+# Parent-domain entries below cover any <project>.firebaseapp.com and
+# <project>.firebasestorage.app via dnsmasq's suffix-match ipset rule.
+identitytoolkit.googleapis.com
+firebasestorage.googleapis.com
+firebaseapp.com
+firebasestorage.app
+
+# Supabase — parent domain covers any <project-ref>.supabase.co.
+supabase.co
+
+# Unity Gaming Services
+player-login.unity.com
+player-auth.services.api.unity.com
+leaderboards.services.api.unity.com
+cloud-save.services.api.unity.com
+economy.services.api.unity.com
+services.api.unity.com
+
+# Cloudflare R2. Parents cover any public bucket (<id>.r2.dev) and any
+# private S3 endpoint (<account-id>.r2.cloudflarestorage.com).
+# Trade-off: r2.dev is a shared subdomain pool — allowlisting it lets the
+# container reach any Cloudflare customer's public bucket, not just yours.
+# Acceptable for local dev; for tighter isolation, list specific buckets.
+r2.dev
+r2.cloudflarestorage.com
+
+# Embedded chat / CRM widgets (script loaded by browser; harmless if SSR).
+widgets.leadconnectorhq.com
+
+# App Store metadata APIs (RSS feeds, scrape endpoints).
+itunes.apple.com
+play.google.com
+
+# Project-specific API. Parent covers www. and any future subdomain.
+uprootedsoftware.com
+
 # Google auth (kept here so generic SDK auth flows still work in Claude
 # container — e.g. gcloud login, OAuth in dev tools that don't need
 # downstream API access). Provider APIs (Meta Graph, Google Ads, GA4 Data,

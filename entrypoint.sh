@@ -14,8 +14,10 @@ mkdir -p /home/dev/.codex
 
 # Setup firewall nếu có allowlist được mount. BROKER_IP/PORT pass dạng positional
 # vì sudo `env_reset` mặc định strip env vars; argv vẫn qua được nguyên vẹn.
+# CLAU_INBOUND_PORTS = published container ports that need INPUT ACCEPT so
+# `docker -p host:container` actually reaches the dev server.
 if [ -f /etc/allowlist.txt ] && [ -n "${CLAU_FIREWALL:-}" ]; then
-  sudo /usr/local/bin/init-firewall.sh /etc/allowlist.txt "${BROKER_IP:-}" "${BROKER_PORT:-}"
+  sudo /usr/local/bin/init-firewall.sh /etc/allowlist.txt "${BROKER_IP:-}" "${BROKER_PORT:-}" "${CLAU_INBOUND_PORTS:-}"
 fi
 
 # Traffic log (debug mode): sniff DNS queries, append unique-ish hostnames.
