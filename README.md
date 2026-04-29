@@ -19,6 +19,7 @@ clau --codex        # open Codex directly
 clau --yolo         # open Claude with --dangerously-skip-permissions
 clau --codex --yolo # open Codex with --dangerously-bypass-approvals-and-sandbox
 clau --no-firewall  # debug mode
+clau --help         # show options, env vars, secret paths, and allowlists
 ```
 
 On Linux, `clau` starts the Docker container with
