@@ -45,7 +45,7 @@ def _row_to_dict(row) -> dict:
 class QueryRequest(BaseModel):
     customer_id: str
     gaql_query: str
-    page_size: int = 10000
+    page_size: int = 0
 
 
 @router.post("/query")
@@ -61,26 +61,18 @@ async def query(req: QueryRequest) -> dict:
         request.page_size = req.page_size
         try:
             response = ga_service.search(request=request)
+            rows = [_row_to_dict(row) for row in response]
         except Exception as e:
             from google.ads.googleads.errors import GoogleAdsException
 
             if isinstance(e, GoogleAdsException):
                 detail = {
                     "request_id": e.request_id,
-                    "errors": [
-                        {
-                            "message": err.message,
-                            "code": (
-                                err.error_code.WhichOneof("error_code") if err.error_code else None
-                            ),
-                        }
-                        for err in e.failure.errors
-                    ],
+                    "errors": [_row_to_dict(err) for err in e.failure.errors],
                 }
                 raise HTTPException(400, detail) from e
             raise
 
-        rows = [_row_to_dict(row) for row in response]
         return {"data": rows, "count": len(rows)}
 
     try:
