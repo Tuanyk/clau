@@ -3,12 +3,11 @@
 Every request through the broker is appended as a single JSONL line to
 `/var/log/broker/requests.log` (overridable via BROKER_LOG_FILE). The
 `/dashboard` route renders the last N entries as a self-refreshing HTML
-page so the user can see exactly what the agent is sending to Meta /
-Google without trusting the broker as a black box.
+page so the user can audit broker activity without trusting it as a black box.
 
-Bodies are truncated at MAX_BODY_BYTES per direction; binary payloads
-(images, video, octet-stream) are recorded as a size-only placeholder so
-the log file doesn't grow unbounded on PNG uploads.
+By default the log is metadata-only. If BROKER_LOG_BODIES=1 is set, request
+bodies are truncated at MAX_BODY_BYTES and known sensitive fields are redacted.
+Binary payloads are recorded as a size-only placeholder.
 """
 from __future__ import annotations
 
@@ -16,17 +15,24 @@ import html
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from secrets import compare_digest
 
 from fastapi import Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse
 
 LOG_FILE = Path(os.environ.get("BROKER_LOG_FILE", "/var/log/broker/requests.log"))
 MAX_BODY_BYTES = 4 * 1024
 DASHBOARD_LIMIT = 200
+LOG_BODIES = os.environ.get("BROKER_LOG_BODIES") == "1"
+SENSITIVE_KEY_RE = re.compile(
+    r"(authorization|access[_-]?token|refresh[_-]?token|api[_-]?key|secret|password)",
+    re.IGNORECASE,
+)
 BINARY_PREFIXES = (
     "image/", "video/", "audio/", "application/octet-stream",
     # Multipart envelopes carry binary payloads (image uploads). The text
@@ -60,27 +66,76 @@ def _make_logger() -> logging.Logger:
 _req_log = _make_logger()
 
 
+def _redact_json(value):
+    if isinstance(value, dict):
+        return {
+            key: "<redacted>" if SENSITIVE_KEY_RE.search(str(key)) else _redact_json(val)
+            for key, val in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_json(item) for item in value]
+    return value
+
+
+def _redact_text(text: str) -> str:
+    return re.sub(
+        r"(?i)(authorization:\s*bearer\s+|access_token[=\":\s]+|refresh_token[=\":\s]+|client_secret[=\":\s]+|api[_-]?key[=\":\s]+)[^&\s\",}]+",
+        r"\1<redacted>",
+        text,
+    )
+
+
+def _content_length(value: str | None) -> int:
+    try:
+        return int(value or 0)
+    except ValueError:
+        return 0
+
+
 def _summarize(body: bytes, content_type: str) -> str:
     ct = (content_type or "").lower()
     if any(ct.startswith(p) for p in BINARY_PREFIXES):
         return f"<{ct or 'binary'} {len(body)} bytes>"
     if len(body) > MAX_BODY_BYTES:
         head = body[:MAX_BODY_BYTES].decode("utf-8", "replace")
-        return f"{head}\n…<truncated, total {len(body)} bytes>"
-    return body.decode("utf-8", "replace")
+        return f"{_redact_text(head)}\n…<truncated, total {len(body)} bytes>"
+    text = body.decode("utf-8", "replace")
+    if ct.startswith("application/json"):
+        try:
+            return json.dumps(_redact_json(json.loads(text)), ensure_ascii=False)
+        except json.JSONDecodeError:
+            pass
+    return _redact_text(text)
+
+
+def _auth_failure(request: Request) -> JSONResponse | None:
+    token = os.environ.get("BROKER_AUTH_TOKEN")
+    if not token:
+        return JSONResponse({"detail": "broker auth token missing"}, status_code=503)
+
+    auth = request.headers.get("authorization", "")
+    scheme, _, supplied = auth.partition(" ")
+    if scheme.lower() != "bearer" or not compare_digest(supplied, token):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
+    return None
 
 
 async def request_log_middleware(request: Request, call_next):
-    """Logs request + response bodies (truncated) to the JSONL file."""
+    """Authenticates requests and logs metadata. Request bodies are opt-in."""
     start = time.perf_counter()
-    req_body = await request.body()
+    req_body = b""
+    response = _auth_failure(request)
+    if response is None and LOG_BODIES:
+        req_body = await request.body()
 
-    response = await call_next(request)
+        async def receive():
+            return {"type": "http.request", "body": req_body, "more_body": False}
 
-    chunks: list[bytes] = []
-    async for chunk in response.body_iterator:
-        chunks.append(chunk)
-    resp_body = b"".join(chunks)
+        request._receive = receive
+
+    if response is None:
+        response = await call_next(request)
     elapsed_ms = (time.perf_counter() - start) * 1000
 
     entry = {
@@ -90,13 +145,14 @@ async def request_log_middleware(request: Request, call_next):
         "query": str(request.url.query) or None,
         "status": response.status_code,
         "ms": round(elapsed_ms),
-        "req_size": len(req_body),
-        "resp_size": len(resp_body),
+        "req_size": len(req_body) if LOG_BODIES else _content_length(request.headers.get("content-length")),
+        "resp_size": _content_length(response.headers.get("content-length")),
         "req_ct": request.headers.get("content-type", ""),
         "resp_ct": response.headers.get("content-type", ""),
-        "req_body": _summarize(req_body, request.headers.get("content-type", "")),
-        "resp_body": _summarize(resp_body, response.headers.get("content-type", "")),
     }
+    if LOG_BODIES:
+        entry["req_body"] = _summarize(req_body, request.headers.get("content-type", ""))
+
     _req_log.info(json.dumps(entry, ensure_ascii=False))
     log.info(
         "%s %s -> %d (%.0fms)",
@@ -105,14 +161,7 @@ async def request_log_middleware(request: Request, call_next):
         response.status_code,
         elapsed_ms,
     )
-
-    headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
-    return Response(
-        content=resp_body,
-        status_code=response.status_code,
-        headers=headers,
-        media_type=response.media_type,
-    )
+    return response
 
 
 def _read_recent_entries(limit: int = DASHBOARD_LIMIT) -> list[dict]:
@@ -189,6 +238,14 @@ def _row_html(e: dict) -> str:
     ts = e.get("ts", "")
     path = e.get("path", "") + (f"?{e['query']}" if e.get("query") else "")
     size = f"{e.get('req_size', 0)}↑/{e.get('resp_size', 0)}↓"
+    if "req_body" in e:
+        body_html = f"""
+  <h3>request · {html.escape(e.get('req_ct',''))}</h3>
+  <pre class="req">{html.escape(e.get('req_body','') or '<empty>')}</pre>"""
+    else:
+        body_html = """
+  <h3>request body</h3>
+  <pre class="req">disabled; set BROKER_LOG_BODIES=1 to opt in</pre>"""
     return f"""<details class="entry">
 <summary>
   <span class="ts">{html.escape(ts.replace('+00:00','Z')[11:19])}</span>
@@ -199,10 +256,7 @@ def _row_html(e: dict) -> str:
   <span class="size">{size}</span>
 </summary>
 <div class="body">
-  <h3>request · {html.escape(e.get('req_ct',''))}</h3>
-  <pre class="req">{html.escape(e.get('req_body','') or '<empty>')}</pre>
-  <h3>response · {html.escape(e.get('resp_ct',''))}</h3>
-  <pre class="resp">{html.escape(e.get('resp_body','') or '<empty>')}</pre>
+{body_html}
 </div>
 </details>"""
 

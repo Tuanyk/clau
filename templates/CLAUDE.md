@@ -18,15 +18,17 @@ This project runs inside a Docker container with a firewall allowlist. Outbound 
 
 If `BROKER_URL` is in your environment, this container does **not** hold third-party API credentials (Meta access tokens, Google service-account JSON, Google Ads developer/refresh tokens). They live in a paired sidecar; reach them through the broker.
 
+- Every broker request must include `Authorization: Bearer $BROKER_AUTH_TOKEN`. Reference the env var by name; do not print it.
 - `GET $BROKER_URL/health` — lists configured providers (e.g. `meta`, `ga4`, `gsc`, `google_ads`).
 - `GET $BROKER_URL/docs` — full OpenAPI reference with typed request bodies.
-- Typical endpoints (POST JSON):
+- Typical endpoints:
   - `/meta/insights`, `/meta/campaigns`, `/meta/ad-accounts` — Marketing API
+  - `/meta/pages`, `/meta/pages/{id}`, `/meta/page-insights` — Page API
   - `/ga4/run-report` — GA4 Data API
   - `/gsc/sites`, `/gsc/search-analytics` — Search Console
   - `/gtm/accounts`, `/gtm/accounts/{id}/containers` — Tag Manager
   - `/google-ads/query`, `/google-ads/customers` — Google Ads (GAQL)
-  - `/passthrough/meta/<path>` — escape hatch for Graph API endpoints not yet wrapped
+  - `GET/POST /passthrough/meta/<path>` and `/passthrough/meta-page/<path>` — escape hatches for Graph API endpoints not yet wrapped
 
 Do NOT call provider hosts directly (`graph.facebook.com`, `googleads.googleapis.com`, `analyticsdata.googleapis.com`, `searchconsole.googleapis.com`) — the firewall blocks them. The broker injects auth and forwards on your behalf, so the actual access tokens never enter this container.
 

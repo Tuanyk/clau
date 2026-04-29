@@ -6,20 +6,21 @@ For each clau-managed project that should use the broker, copy this tree:
 
 ```bash
 PROJECT=my-app                 # whatever your project's basename is
-cp -r templates/secrets-example/. secrets/$PROJECT/
-rm secrets/$PROJECT/README.md  # optional cleanup
+mkdir -p ~/.clau/secrets/$PROJECT
+cp -r templates/secrets-example/. ~/.clau/secrets/$PROJECT/
+rm ~/.clau/secrets/$PROJECT/README.md  # optional cleanup
 ```
 
-Then edit each `*.env` under `secrets/$PROJECT/broker/` and drop your real
-`gcp-sa.json` next to them. The launcher detects `secrets/$PROJECT/broker/`
+Then edit each `*.env` under `~/.clau/secrets/$PROJECT/broker/` and drop your real
+`gcp-sa.json` next to them. The launcher detects that `broker/` directory
 on the next `clau` run and brings up `broker-$PROJECT`.
 
 ## Resulting layout
 
 ```
-secrets/
+~/.clau/secrets/
   my-app/
-    .env                       # OPTIONAL — your APP runtime secrets
+    .env                       # OPTIONAL — low-risk app runtime values
                                # (DATABASE_URL, APP_OPENAI_API_KEY, …)
                                # NOT used by the broker.
     broker/                    # Broker-only credentials
@@ -36,7 +37,7 @@ at startup; `gcp-sa.json` (or `service-account.json`) auto-sets
 
 A provider only activates if its credentials are present. Examples:
 
-| You filled… | `GET $BROKER_URL/health` returns |
+| You filled… | authenticated `GET $BROKER_URL/health` returns |
 |---|---|
 | only `meta.env` | `{"providers": ["meta"]}` |
 | only `gcp-sa.json` | `{"providers": ["ga4", "gsc", "gtm"]}` |
@@ -54,20 +55,29 @@ After populating and starting the project:
 ```bash
 clau                                         # broker auto-starts on cold start
 # inside the container:
-curl -s $BROKER_URL/health | jq
-curl -s $BROKER_URL/docs                      # OpenAPI UI for typed bodies
+curl -s -H "Authorization: Bearer $BROKER_AUTH_TOKEN" $BROKER_URL/health | jq
+curl -s -H "Authorization: Bearer $BROKER_AUTH_TOKEN" $BROKER_URL/docs
 
 # example calls:
 curl -s -X POST $BROKER_URL/meta/insights \
+  -H "Authorization: Bearer $BROKER_AUTH_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"ad_account_id":"<your-id>","fields":["spend","impressions"],
        "params":{"date_preset":"last_7d"}}'
 
-curl -s $BROKER_URL/gtm/accounts | jq
+curl -s -X POST $BROKER_URL/meta/page-insights \
+  -H "Authorization: Bearer $BROKER_AUTH_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"page_id":"<page-id>","metrics":["page_impressions"],
+       "params":{"period":"day"}}'
+
+curl -s -H "Authorization: Bearer $BROKER_AUTH_TOKEN" $BROKER_URL/gtm/accounts | jq
 curl -s -X POST $BROKER_URL/ga4/run-report \
+  -H "Authorization: Bearer $BROKER_AUTH_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"property_id":"<id>","dimensions":["date"],"metrics":["sessions"]}'
 ```
 
-Real Authorization headers are injected by the broker — they never appear
-in your shell history or in any tool result Claude sees.
+Provider Authorization headers are injected by the broker. The broker bearer
+token is a per-run guard for this local sidecar; reference it by env-var name
+and do not print it.

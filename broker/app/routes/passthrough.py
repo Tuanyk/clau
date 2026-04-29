@@ -1,7 +1,8 @@
 """Generic passthrough — escape hatch for endpoints not yet wrapped.
 
-Currently only Meta Graph API: Claude can call any /<version>/<path> on
-graph.facebook.com without ever seeing the access token.
+Currently Meta Graph API: Claude can call Graph paths without ever seeing the
+access token. `/meta/...` uses META_ACCESS_TOKEN; `/meta-page/...` uses
+META_PAGE_ACCESS_TOKEN or a page token derived from META_USER_ACCESS_TOKEN.
 """
 from __future__ import annotations
 
@@ -9,24 +10,18 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.config import settings
+from app.routes.meta import _resolve_page_access_token
 
 router = APIRouter()
 
 
-@router.api_route(
-    "/meta/{path:path}",
-    methods=["GET", "POST", "DELETE"],
-)
-async def meta_passthrough(path: str, request: Request) -> Response:
+async def _forward_meta(path: str, request: Request, access_token: str) -> Response:
     cfg = settings()["meta"]
-    if not cfg.configured:
-        raise HTTPException(503, "meta not configured")
-
     base = f"https://graph.facebook.com/{cfg.graph_version}"
     url = f"{base}/{path.lstrip('/')}"
 
     params = dict(request.query_params)
-    params["access_token"] = cfg.access_token
+    params["access_token"] = access_token
 
     body = await request.body()
     headers = {
@@ -54,3 +49,26 @@ async def meta_passthrough(path: str, request: Request) -> Response:
         status_code=upstream.status_code,
         headers=response_headers,
     )
+
+
+@router.api_route(
+    "/meta/{path:path}",
+    methods=["GET", "POST"],
+)
+async def meta_passthrough(path: str, request: Request) -> Response:
+    """Generic Graph passthrough using META_ACCESS_TOKEN."""
+    cfg = settings()["meta"]
+    if not cfg.access_token:
+        raise HTTPException(503, "META_ACCESS_TOKEN missing for /passthrough/meta")
+    return await _forward_meta(path, request, cfg.access_token)
+
+
+@router.api_route(
+    "/meta-page/{path:path}",
+    methods=["GET", "POST"],
+)
+async def meta_page_passthrough(path: str, request: Request) -> Response:
+    """Page Graph passthrough using broker-local page-token resolution."""
+    page_id = path.strip("/").split("/", 1)[0] or None
+    page_token, _ = await _resolve_page_access_token(page_id)
+    return await _forward_meta(path, request, page_token)

@@ -8,7 +8,19 @@ set -e
 # Firewall (default-deny + allowlist). Broker doesn't have its own broker
 # sidecar, so positional 2/3 stay empty and the broker-rule block is skipped.
 if [ -f /etc/allowlist.txt ] && [ -n "${CLAU_FIREWALL:-}" ]; then
-  sudo /usr/local/bin/init-firewall.sh /etc/allowlist.txt "" "" "${CLAU_INBOUND_PORTS:-}"
+  if [ "$(id -u)" != "0" ]; then
+    sudo /usr/local/bin/init-firewall.sh /etc/allowlist.txt "" "" "${CLAU_INBOUND_PORTS:-}"
+  else
+    /usr/local/bin/init-firewall.sh /etc/allowlist.txt "" "" "${CLAU_INBOUND_PORTS:-}"
+  fi
+fi
+
+if [ "$(id -u)" = "0" ]; then
+  chown -R broker:broker /var/log/broker 2>/dev/null || true
+  if command -v gosu >/dev/null 2>&1; then
+    exec gosu broker "$@"
+  fi
+  exec runuser -u broker -- "$@"
 fi
 
 exec "$@"

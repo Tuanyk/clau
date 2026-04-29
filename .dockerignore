@@ -1,0 +1,16 @@
+.git
+secrets/
+allowlists/
+.env
+*.env
+*.log
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.codex/
+.claude/
+.clau/
+node_modules/
+dist/
+build/

@@ -1,11 +1,11 @@
 """Broker entry point.
 
-Holds long-lived API credentials so they never enter the Claude container.
-Claude calls these endpoints over plain HTTP without auth; the broker injects
-provider-side credentials and forwards to Meta / Google.
+Holds long-lived API credentials so they never enter the AI container.
+The paired AI container calls these endpoints with a per-run bearer token; the
+broker injects provider-side credentials and forwards to Meta / Google.
 
-Per-request bodies are logged to a JSONL file and rendered at /dashboard so
-the user can audit exactly what the agent is sending. See `request_log.py`.
+Per-request metadata is logged to a JSONL file and rendered at /dashboard.
+See `request_log.py`.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ app.middleware("http")(request_log_middleware)
 
 
 @app.get("/health")
-def health():
+async def health():
     return {
         "ok": True,
         "providers": configured_providers(),
@@ -37,7 +37,7 @@ def health():
 
 
 @app.get("/dashboard")
-def dashboard():
+async def dashboard():
     return render_dashboard()
 
 

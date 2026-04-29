@@ -3,8 +3,8 @@
 clau PreToolUse hook — block obvious secret-reading attempts.
 
 Reads tool-call JSON on stdin. Exit 2 = block (reason on stderr, shown to AI).
-Exit 0 = allow. Logs every block to /var/log/clau/secrets-guard.log (root-owned,
-AI cannot reach it).
+Exit 0 = allow. Optional block logging can be enabled with
+CLAU_SECRETS_GUARD_LOG=1; logged entries intentionally exclude full tool input.
 
 This is defense-in-depth, not primary security. The sidecar broker + firewall
 are the load-bearing pieces.
@@ -45,6 +45,8 @@ BASH_RULES = [
 
 
 def log_block(tool: str, payload: dict, reason: str) -> None:
+    if os.environ.get("CLAU_SECRETS_GUARD_LOG") != "1":
+        return
     try:
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
         with open(LOG_PATH, "a") as f:
@@ -52,7 +54,8 @@ def log_block(tool: str, payload: dict, reason: str) -> None:
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "tool": tool,
                 "reason": reason,
-                "payload": payload,
+                "path": payload.get("file_path"),
+                "command_len": len(payload.get("command", "")),
             }) + "\n")
     except Exception:
         pass
@@ -62,7 +65,7 @@ def block(tool: str, payload: dict, reason: str) -> None:
     log_block(tool, payload, reason)
     print(f"[clau-secrets-guard] BLOCKED: {reason}", file=sys.stderr)
     print("If you legitimately need this, ask the user to adjust the hook or", file=sys.stderr)
-    print("use the auth broker (http://broker:9999) instead of reading secrets directly.", file=sys.stderr)
+    print("use the auth broker (BROKER_URL) instead of reading secrets directly.", file=sys.stderr)
     sys.exit(2)
 
 

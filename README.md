@@ -65,6 +65,11 @@ codex-auth  -> /home/dev/.codex
 
 This keeps OAuth/session credentials inside Docker volumes instead of using your host API keys. The launcher intentionally blanks `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` for the container, even if they exist on the host or in an env file, so Claude/Codex do not inherit long-lived API keys.
 
+By default, a normal shell/Claude run mounts only `claude-auth`; `clau --codex`
+mounts only `codex-auth`. Set `CLAU_WITH_CODEX_AUTH=1` if you explicitly need
+Codex auth in a normal shell, or `CLAU_WITHOUT_AUTH=1` for a shell with neither
+auth volume mounted.
+
 Codex models can differ by auth mode and rollout. `gpt-5.5` is available in
 Codex only when it appears for the signed-in ChatGPT account; API-key auth
 does not expose it. If it does not appear yet, use `gpt-5.4` and rebuild later
@@ -111,7 +116,7 @@ CLAU_SNAPSHOT_DIR=/mnt/backup/clau # store somewhere other than ~/.clau/snapshot
 ```text
 ~/.clau/secrets/
   my-app/
-    .env          # API keys, connection strings — key=value
+    .env          # low-risk app runtime values — key=value
     gcp.json      # service account JSON
     id_ed25519    # SSH key
     kubeconfig    # K8s config
@@ -121,9 +126,9 @@ CLAU_SNAPSHOT_DIR=/mnt/backup/clau # store somewhere other than ~/.clau/snapshot
 
 On every `clau` run, for project `my-app`:
 
-1. `~/.clau/secrets/my-app/.env` is loaded into the container as env vars (`APP_API_KEY=sk-...` etc.).
-2. `~/.clau/secrets/my-app/` is mounted read-only at `/run/clau-secrets/` in the container.
-3. **Every file in that dir (except `.env`) gets its path auto-injected as an env var** — uppercase, non-alphanumerics become `_`:
+1. `~/.clau/secrets/my-app/.env` is loaded into the container as env vars.
+2. Top-level files in `~/.clau/secrets/my-app/` are mounted read-only under `/run/clau-secrets/`.
+3. **Every top-level file in that dir (except `.env`) gets its path auto-injected as an env var** — uppercase, non-alphanumerics become `_`:
 
    | File in `~/.clau/secrets/my-app/` | Auto-injected env var |
    |---|---|
@@ -134,9 +139,12 @@ On every `clau` run, for project `my-app`:
 
    Well-known filenames (`gcp.json`, `service-account.json`, `gcp-*.json`, `*-gcp.json`, `kubeconfig*`) also set the SDK-expected name so `google.cloud.*` and `kubectl` work out of the box without touching `.env`. You can always override by setting the same variable in your own `.env`.
 
+Directories are not mounted into `/run/clau-secrets`; `broker/` is reserved for
+the broker sidecar and is not mounted into the AI container.
+
 On entry you'll see a line like:
 ```
-🔑 File secrets: /home/you/.clau/secrets/my-app → /run/clau-secrets (ro)
+🔑 File secrets: top-level files in /home/you/.clau/secrets/my-app → /run/clau-secrets (ro)
    Injected env vars: GCP_JSON GOOGLE_APPLICATION_CREDENTIALS KUBECONFIG
 ```
 
@@ -145,9 +153,9 @@ On entry you'll see a line like:
 Earlier clau versions used two separate paths — they both still work and are loaded in addition to the directory layout:
 
 - `~/.clau/secrets/<project-name>.env` — env vars only (flat file)
-- `<project>/.env` — the project's own `.env` in its root (auto-mounted)
+- `<project>/.env` — the project's own `.env` in its root. It is no longer auto-loaded by default because the workspace is mounted live and the file is AI-readable.
 
-If multiple are present, load order is: `~/.clau/secrets/<project>.env` → `~/.clau/secrets/<project>/.env` → `<project>/.env` → `-e` injected vars. Later values win on conflicts, so the project's own `.env` has the final say.
+If multiple are present, default load order is: `~/.clau/secrets/<project>.env` → `~/.clau/secrets/<project>/.env` → `-e` injected vars. Set `CLAU_LOAD_PROJECT_ENV=1` to restore legacy project `.env` loading for a run; later values win on conflicts.
 
 ### What the AI can do with credential files
 
@@ -158,7 +166,10 @@ Treat the values as opaque; the path/name is the only thing the AI should touch.
 
 ### Alternative: credentials inside the project
 
-If you'd rather keep credentials inside the project (at a gitignored path like `.secrets/gcp.json`) than in `~/.clau/secrets/`, that works too — the project is mounted at the same absolute path inside the container as on the host. Set `GOOGLE_APPLICATION_CREDENTIALS=/home/me/work/my-app/.secrets/gcp.json` in the project `.env`. Useful when credentials are shared with host tooling that also reads from the same spot.
+Keeping credentials inside the project (for example `.secrets/gcp.json` or
+`.env`) means the AI container can read them because the project is bind-mounted.
+Use this only for low-risk or throwaway credentials. Put long-lived provider
+credentials under `~/.clau/secrets/<project>/broker/`.
 
 ## Auto-seeded AI instructions (`CLAUDE.md` / `AGENTS.md`)
 
@@ -233,22 +244,25 @@ instead of `~/.clau/secrets/<project>/`. On `clau` start:
 
 1. A `broker-<project>` container comes up on a private docker network
    (`clau-net-<project>`) and reads creds from `/run/broker-secrets/`.
-2. The Claude container joins the same network and gets `BROKER_URL=http://broker:8080`.
-   It does **not** receive the API keys themselves.
+2. The AI container joins the same network and gets `BROKER_URL=http://broker:8080`
+   plus a per-run `BROKER_AUTH_TOKEN`. It does **not** receive the provider API keys themselves.
 3. Claude's firewall removes Meta / Google Ads / Analytics / Search
    Console hosts; only the broker IP and the standard dev hosts are
    reachable. The broker has its own firewall (`~/.clau/allowlists/broker.txt`)
    that allows only the provider APIs.
-4. Claude calls `POST http://broker:8080/meta/insights` etc. The broker
-   injects the access token, talks to graph.facebook.com, returns the
-   JSON. The token never appears in any tool result.
+4. The AI calls `POST http://broker:8080/meta/insights` etc. with
+   `Authorization: Bearer $BROKER_AUTH_TOKEN`. The broker injects the provider
+   access token, talks to graph.facebook.com, returns the JSON. The provider
+   token never appears in any tool result.
 
 ```
 ~/.clau/secrets/
   client-foo/
-    .env              # ← visible to Claude (DB url, app secrets)
+    .env              # ← visible to the AI container as env vars
     broker/           # ← visible to broker only
       meta.env        # META_ACCESS_TOKEN=…, META_AD_ACCOUNT_ID=…
+                      # META_PAGE_ACCESS_TOKEN=…, META_PAGE_ID=… for Page APIs
+                      # META_INSTAGRAM_BUSINESS_ACCOUNT_ID=… for IG APIs
       google-ads.env  # GOOGLE_ADS_DEVELOPER_TOKEN=…, refresh token, login customer id
       gcp-sa.json     # service account JSON (GA4 + GSC)
   client-bar/
@@ -266,18 +280,32 @@ networks with different credentials.
 
 ```
 POST /meta/insights              {ad_account_id, fields, params}
+GET  /meta/pages                 list pages, page tokens redacted
+GET  /meta/pages/{page_id}       page profile fields
+POST /meta/page-insights         {page_id, metrics, params}
 POST /ga4/run-report             {property_id, dimensions, metrics, date_ranges}
 POST /gsc/search-analytics       {site_url, start_date, end_date, dimensions}
 POST /google-ads/query           {customer_id, gaql_query}
-ANY  /passthrough/meta/<path>    arbitrary Graph API call
+GET/POST /passthrough/meta/<path> arbitrary Graph API call
+GET/POST /passthrough/meta-page/<path> arbitrary Page Graph call
+```
+
+All endpoints require:
+
+```bash
+-H "Authorization: Bearer $BROKER_AUTH_TOKEN"
 ```
 
 **Opt-in**: if `~/.clau/secrets/<project>/broker/` doesn't exist, nothing
 changes — the broker isn't started, behavior is identical to before.
 
-**Lifecycle**: the broker container stays up after `clau` exits so
-re-attach is fast. Stop it explicitly with `docker stop broker-<project>`.
-If broker startup fails, the stopped container is kept so you can inspect it:
+**Dashboard**: host publishing is disabled by default. Set
+`CLAU_BROKER_DASHBOARD=1` to publish the broker on `127.0.0.1`; the dashboard
+still requires the bearer token.
+
+**Lifecycle**: each fresh `clau` run recreates the broker container so changed
+credentials and the per-run auth token stay in sync. If broker startup fails,
+the stopped container is kept so you can inspect it:
 `docker logs --tail 80 broker-<project>`. To print those logs during launcher
 startup, run `CLAU_BROKER_SHOW_LOGS=1 clau`.
 
@@ -287,18 +315,18 @@ Two layers run inside every `clau` container to catch obvious secret-reading att
 
 **Layer 1 — `permissions.deny`** in `claude-settings.json`. Mounted read-only at `/etc/claude-code/managed-settings.json` inside the container — Claude Code's "managed" scope, which overrides user/project settings and cannot be disabled by the AI. Pattern-blocks tool calls like `Read(/root/**)`, `Bash(printenv)`, `Bash(env)`, `Bash(cat:/run/secrets/**)`, etc. User preferences (theme, model, effort) still save normally to `~/.claude/settings.json`.
 
-**Layer 2 — `PreToolUse` hook** at `hooks/secrets-guard.py`. Inspects every Bash/Read/Write/Edit call, blocks patterns like `cat /root/...`, dynamic DNS lookups (`nslookup $X`), POSTing env vars to external hosts, writing PEM blocks to disk. Logs all blocks to `/var/log/clau/secrets-guard.log` (root-owned, AI cannot read).
+**Layer 2 — `PreToolUse` hook** at `hooks/secrets-guard.py`. Inspects every Bash/Read/Write/Edit call, blocks patterns like `cat /root/...`, dynamic DNS lookups (`nslookup $X`), POSTing env vars to external hosts, writing PEM blocks to disk. Block logging is disabled by default; set `CLAU_SECRETS_GUARD_LOG=1` to opt in to minimal logs that exclude full tool input.
 
 To tune the rules, edit `hooks/secrets-guard.py` (host side); changes take effect on next `clau` start. To disable temporarily for debugging, comment out the `hooks` block in `claude-settings.json`.
 
-**Important**: this is *defense-in-depth*, not primary security. A determined AI can bypass these (encode the secret, use indirection, write a script). The real boundaries are: (1) sidecar broker so long-lived creds never enter the container, (2) firewall allowlist so exfil paths are blocked. The hook + deny rules raise the bar against accidental leaks and shallow attempts.
+**Important**: this is *defense-in-depth*, not primary security. A determined AI can bypass hooks and policy rules if the secret is already present. The strongest boundary is the sidecar broker: long-lived provider credentials should never enter the AI container.
 
 ## Firewall allowlist
 
 - Default: `allowlist.txt` (clau install root)
 - Per-project override: `~/.clau/allowlists/<project-name>.txt` (override location with `CLAU_ALLOWLISTS_DIR`)
 
-One domain per line. The container can only reach hosts on the allowlist (plus DNS).
+One domain per line. The container can only reach hosts on the allowlist for HTTP/S traffic. DNS is still required for resolution, so do not treat the firewall as the only protection for secrets that are already inside the container.
 
 ## Volumes
 

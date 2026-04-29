@@ -91,7 +91,14 @@ if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
   echo "📎 Attach to existing $CONTAINER_NAME"
   echo "   ⚠️  Env vars and mounts from this run are NOT applied on attach."
   echo "      To pick up secrets/ or .env changes: docker stop $CONTAINER_NAME && clau"
-  exec docker exec -it "$CONTAINER_NAME" bash
+  exec docker exec -it \
+    --user dev \
+    -e HOME=/home/dev \
+    -e USER=dev \
+    -e LOGNAME=dev \
+    -e SHELL=/bin/bash \
+    -w "$PROJECT_DIR" \
+    "$CONTAINER_NAME" bash
 fi
 
 # ─── Snapshot working dir (recovery if AI nukes things) ─────
@@ -252,9 +259,18 @@ ENV_FILES=()
 PROJECT_FILE_SECRETS="$SECRETS_DIR/$PROJECT_NAME"
 [[ -f "$SECRETS_DIR/$PROJECT_NAME.env" ]] && ENV_FILES+=(--env-file "$SECRETS_DIR/$PROJECT_NAME.env")
 [[ -f "$PROJECT_FILE_SECRETS/.env" ]]     && ENV_FILES+=(--env-file "$PROJECT_FILE_SECRETS/.env")
-[[ -f "$PROJECT_DIR/.env" ]]              && ENV_FILES+=(--env-file "$PROJECT_DIR/.env")
+if [[ -f "$PROJECT_DIR/.env" ]]; then
+  if [[ "${CLAU_LOAD_PROJECT_ENV:-0}" == "1" ]]; then
+    ENV_FILES+=(--env-file "$PROJECT_DIR/.env")
+    echo "⚠️  Loading project .env because CLAU_LOAD_PROJECT_ENV=1. It is visible in the mounted workspace."
+  else
+    echo "⚠️  Project .env exists but is not auto-loaded. It is still visible in the mounted workspace."
+    echo "   Move high-value credentials to the broker; set CLAU_LOAD_PROJECT_ENV=1 only for legacy runs."
+  fi
+fi
 
 # ─── Port helpers (used by broker dashboard and dev-server forwarding) ──
+CLAU_PORT_SCAN_LIMIT="${CLAU_PORT_SCAN_LIMIT:-200}"
 reserved_host_ports=()
 
 host_port_is_reserved() {
@@ -312,11 +328,16 @@ BROKER_ENABLED=0
 BROKER_NETWORK=""
 BROKER_IP=""
 BROKER_PORT=8080
+BROKER_AUTH_TOKEN=""
 if [[ -d "$BROKER_DIR" ]]; then
   BROKER_IMAGE="clau-broker"
   if ! docker image inspect "$BROKER_IMAGE" &>/dev/null; then
     echo "⚠️  Broker image chưa có ($BROKER_IMAGE). Skip broker. Build: $CONFIG_DIR/install.sh"
   else
+    if ! BROKER_AUTH_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')" || [[ -z "$BROKER_AUTH_TOKEN" ]]; then
+      echo "❌ Could not generate broker auth token."
+      exit 1
+    fi
     BROKER_NETWORK="clau-net-$PROJECT_NAME"
     BROKER_NAME="broker-$PROJECT_NAME"
     BROKER_ALLOWLIST="$ALLOWLISTS_DIR/broker.txt"
@@ -336,49 +357,47 @@ if [[ -d "$BROKER_DIR" ]]; then
       || docker network create "$BROKER_NETWORK" >/dev/null
 
     BROKER_READY=0
-    if ! docker ps --format '{{.Names}}' | grep -q "^${BROKER_NAME}$"; then
-      # Stop any stale stopped container with the same name.
-      docker rm -f "$BROKER_NAME" &>/dev/null || true
+    # Recreate on every fresh clau run so credentials and the per-run auth token
+    # cannot drift from the paired AI container.
+    docker rm -f "$BROKER_NAME" &>/dev/null || true
 
-      # Publish the broker on a host port so the user can open /dashboard in
-      # their browser. Bind to 127.0.0.1 only — broker bodies contain ad
-      # account data and shouldn't be exposed to the LAN.
-      DASHBOARD_BASE_PORT="${CLAU_BROKER_DASHBOARD_PORT:-19000}"
-      DASHBOARD_PUBLISH=()
+    DASHBOARD_BASE_PORT="${CLAU_BROKER_DASHBOARD_PORT:-19000}"
+    DASHBOARD_PUBLISH=()
+    if [[ "${CLAU_BROKER_DASHBOARD:-0}" == "1" ]]; then
       if dashboard_host_port="$(find_available_host_port "$DASHBOARD_BASE_PORT" "$CLAU_PORT_SCAN_LIMIT")"; then
         DASHBOARD_PUBLISH=(-p "127.0.0.1:$dashboard_host_port:$BROKER_PORT")
         reserved_host_ports+=("$dashboard_host_port")
       else
         echo "⚠️  No free host port for broker dashboard near $DASHBOARD_BASE_PORT — dashboard will only be reachable from inside the docker network"
       fi
-
-      docker run -d \
-        --name "$BROKER_NAME" \
-        --network "$BROKER_NETWORK" \
-        --network-alias broker \
-        --cap-add=NET_ADMIN --cap-add=NET_RAW \
-        "${DASHBOARD_PUBLISH[@]}" \
-        -e CLAU_FIREWALL=1 \
-        -e "CLAU_INBOUND_PORTS=$BROKER_PORT" \
-        -v "$CONFIG_DIR/broker/entrypoint.sh:/entrypoint.sh:ro" \
-        -v "$CONFIG_DIR/init-firewall.sh:/usr/local/bin/init-firewall.sh:ro" \
-        -v "$BROKER_DIR:/run/broker-secrets:ro" \
-        -v "$BROKER_ALLOW_TMP:/etc/allowlist.txt:ro" \
-        "$BROKER_IMAGE" >/dev/null
-      # Wait for broker to be reachable (≤8s).
-      for _ in $(seq 1 16); do
-        docker exec "$BROKER_NAME" sh -c \
-          'curl -fs -m 1 http://127.0.0.1:8080/health' &>/dev/null && {
-            BROKER_READY=1
-            break
-          }
-        docker ps --format '{{.Names}}' | grep -q "^${BROKER_NAME}$" || break
-        sleep 0.5
-      done
     else
-      docker exec "$BROKER_NAME" sh -c \
-        'curl -fs -m 1 http://127.0.0.1:8080/health' &>/dev/null && BROKER_READY=1
+      echo "📊 Broker dashboard host publish disabled. Set CLAU_BROKER_DASHBOARD=1 to publish it on 127.0.0.1."
     fi
+
+    docker run -d \
+      --name "$BROKER_NAME" \
+      --network "$BROKER_NETWORK" \
+      --network-alias broker \
+      --cap-add=NET_ADMIN --cap-add=NET_RAW \
+      "${DASHBOARD_PUBLISH[@]}" \
+      -e CLAU_FIREWALL=1 \
+      -e "CLAU_INBOUND_PORTS=$BROKER_PORT" \
+      -e "BROKER_AUTH_TOKEN=$BROKER_AUTH_TOKEN" \
+      -v "$CONFIG_DIR/broker/entrypoint.sh:/entrypoint.sh:ro" \
+      -v "$CONFIG_DIR/init-firewall.sh:/usr/local/bin/init-firewall.sh:ro" \
+      -v "$BROKER_DIR:/run/broker-secrets:ro" \
+      -v "$BROKER_ALLOW_TMP:/etc/allowlist.txt:ro" \
+      "$BROKER_IMAGE" >/dev/null
+    # Wait for broker to be reachable (≤8s).
+    for _ in $(seq 1 16); do
+      docker exec "$BROKER_NAME" sh -c \
+        'curl -fs -m 1 -H "Authorization: Bearer $BROKER_AUTH_TOKEN" http://127.0.0.1:8080/health' &>/dev/null && {
+          BROKER_READY=1
+          break
+        }
+      docker ps --format '{{.Names}}' | grep -q "^${BROKER_NAME}$" || break
+      sleep 0.5
+    done
 
     if [[ "$BROKER_READY" -ne 1 ]]; then
       echo "❌ Broker $BROKER_NAME did not start cleanly."
@@ -412,12 +431,9 @@ if [[ -d "$BROKER_DIR" ]]; then
     else
       BROKER_ENABLED=1
       echo "🤝 Broker: $BROKER_NAME ($BROKER_IP:$BROKER_PORT) on $BROKER_NETWORK"
-      # Pre-existing brokers were started before the dashboard was published;
-      # `docker port` returns nothing for them and the user gets no URL until
-      # they recreate the container with `docker rm -f`.
-      DASHBOARD_HOST_BIND="$(docker port "$BROKER_NAME" "$BROKER_PORT" 2>/dev/null | head -1)"
+      DASHBOARD_HOST_BIND="$(docker port "$BROKER_NAME" "$BROKER_PORT" 2>/dev/null | head -1 || true)"
       if [[ -n "$DASHBOARD_HOST_BIND" ]]; then
-        echo "📊 Dashboard: http://${DASHBOARD_HOST_BIND/0.0.0.0/127.0.0.1}/dashboard"
+        echo "📊 Dashboard: http://${DASHBOARD_HOST_BIND/0.0.0.0/127.0.0.1}/dashboard (requires Authorization header)"
       fi
     fi
   fi
@@ -426,13 +442,24 @@ fi
 # ─── Volumes ────────────────────────────────────────────────
 MOUNTS=(
   -v "$PROJECT_DIR:$PROJECT_DIR"
-  -v "$CLAUDE_AUTH_VOLUME:/home/dev/.claude"
-  -v "$CODEX_AUTH_VOLUME:/home/dev/.codex"
   -v "$HISTORY_VOLUME:/home/dev/.history-store"
   -v "$PIP_VOLUME:/home/dev/.pip-user"
   -v "$NPM_VOLUME:/home/dev/.npm"
   -v "$TOOLS_VOLUME:/opt/clau-tools"
 )
+if [[ "${CLAU_WITHOUT_AUTH:-0}" == "1" ]]; then
+  echo "🔐 Auth volumes: not mounted (CLAU_WITHOUT_AUTH=1)"
+elif [[ "$RUN_CODEX" -eq 1 ]]; then
+  MOUNTS+=(-v "$CODEX_AUTH_VOLUME:/home/dev/.codex")
+  echo "🔐 Auth volume: Codex only"
+else
+  MOUNTS+=(-v "$CLAUDE_AUTH_VOLUME:/home/dev/.claude")
+  echo "🔐 Auth volume: Claude only"
+  if [[ "${CLAU_WITH_CODEX_AUTH:-0}" == "1" ]]; then
+    MOUNTS+=(-v "$CODEX_AUTH_VOLUME:/home/dev/.codex")
+    echo "🔐 Auth volume: Codex also mounted because CLAU_WITH_CODEX_AUTH=1"
+  fi
+fi
 
 # ─── Port forwarding cho dev servers ────────────────────────
 # Mặc định map host port tự động từ 13000 tới container port 3000.
@@ -445,7 +472,6 @@ MOUNTS=(
 # Bind vào 127.0.0.1 để không lộ ra LAN.
 CLAU_DEFAULT_HOST_PORT="${CLAU_DEFAULT_HOST_PORT:-13000}"
 CLAU_DEFAULT_CONTAINER_PORT="${CLAU_DEFAULT_CONTAINER_PORT:-3000}"
-CLAU_PORT_SCAN_LIMIT="${CLAU_PORT_SCAN_LIMIT:-200}"
 CLAU_PORTS_RAW="${CLAU_PORTS-auto:$CLAU_DEFAULT_CONTAINER_PORT}"
 PORT_OPTS=()
 exposed_ports=()
@@ -505,11 +531,16 @@ done
 #   id_ed25519    → ID_ED25519=/run/clau-secrets/id_ed25519
 EXTRA_ENV=()
 if [[ -d "$PROJECT_FILE_SECRETS" ]]; then
-  MOUNTS+=(-v "$PROJECT_FILE_SECRETS:/run/clau-secrets:ro")
+  secret_tmpfs_added=0
   injected=()
   while IFS= read -r -d '' f; do
     fname="$(basename "$f")"
     [[ "$fname" == ".env" ]] && continue
+    if [[ "$secret_tmpfs_added" -eq 0 ]]; then
+      MOUNTS+=(--tmpfs /run/clau-secrets:mode=755)
+      secret_tmpfs_added=1
+    fi
+    MOUNTS+=(-v "$f:/run/clau-secrets/$fname:ro")
     # Normalize: uppercase, mọi char không phải [A-Z0-9] → _, trim _.
     var="$(printf '%s' "$fname" | tr '[:lower:]' '[:upper:]' | tr -c 'A-Z0-9' '_')"
     var="${var##_}"; var="${var%%_}"
@@ -530,8 +561,11 @@ if [[ -d "$PROJECT_FILE_SECRETS" ]]; then
     esac
   done < <(find "$PROJECT_FILE_SECRETS" -maxdepth 1 -type f -print0)
   if [[ ${#injected[@]} -gt 0 ]]; then
-    echo "🔑 File secrets: $PROJECT_FILE_SECRETS → /run/clau-secrets (ro)"
+    echo "🔑 File secrets: top-level files in $PROJECT_FILE_SECRETS → /run/clau-secrets (ro)"
     echo "   Injected env vars: ${injected[*]}"
+  fi
+  if [[ -d "$BROKER_DIR" ]]; then
+    echo "🔐 Broker secrets: $BROKER_DIR → broker only (not mounted into AI container)"
   fi
 fi
 
@@ -577,6 +611,7 @@ if [[ "$BROKER_ENABLED" -eq 1 ]]; then
     -e "BROKER_URL=http://broker:$BROKER_PORT"
     -e "BROKER_IP=$BROKER_IP"
     -e "BROKER_PORT=$BROKER_PORT"
+    -e "BROKER_AUTH_TOKEN=$BROKER_AUTH_TOKEN"
   )
 fi
 
@@ -601,7 +636,6 @@ unset OPENAI_API_KEY
 # Fix perms: Docker tạo named volume với owner root; chown về dev lần đầu.
 # In env summary sau khi start (chỉ chạy trên fresh docker run, không trên attach).
 ENTRY_CMD='
-sudo chown dev:dev ~/.history-store ~/.npm 2>/dev/null || true
 mkdir -p ~/.history-store
 touch ~/.history-store/bash_history
 ln -sf ~/.history-store/bash_history ~/.bash_history
@@ -618,6 +652,7 @@ fi
 if [ -n "$BROKER_URL" ]; then
   echo "─── API broker (use this for Meta / Google Ads / GA4 / GSC) ───"
   echo "  $BROKER_URL"
+  echo "  Auth header: Authorization: Bearer \$BROKER_AUTH_TOKEN"
   echo "  Provider hosts (graph.facebook.com, googleads.googleapis.com, ...) are firewalled off."
   echo "  Endpoints: GET /health, /docs   POST /meta/insights, /ga4/run-report, /gsc/search-analytics, /google-ads/query"
 fi

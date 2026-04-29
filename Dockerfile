@@ -11,7 +11,7 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean \
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates gnupg git sudo bash \
+    curl ca-certificates gnupg git sudo bash gosu \
     iptables ipset bubblewrap dnsutils dnsmasq-base tcpdump \
     fzf ripgrep \
     python3 python3-pip python3-venv
@@ -49,8 +49,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 ARG USER_UID=1000
 ARG USER_GID=1000
 RUN groupadd --gid $USER_GID dev 2>/dev/null || true \
-    && useradd --uid $USER_UID --gid $USER_GID -ms /bin/bash dev \
-    && echo "dev ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+    && useradd --uid $USER_UID --gid $USER_GID -ms /bin/bash dev
 
 # Native Claude Code (trước khi switch user để có quyền)
 USER dev
@@ -124,10 +123,10 @@ USER root
 COPY --chown=dev:dev entrypoint.sh /entrypoint.sh
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
 RUN chmod +x /entrypoint.sh /usr/local/bin/init-firewall.sh \
-    && mkdir -p /etc/clau/hooks /var/log/clau /opt/clau-tools/bin \
-    && chown -R dev:dev /opt/clau-tools \
+    && mkdir -p /etc/clau/hooks /var/log/clau /opt/clau-tools/bin /run/clau-secrets \
+    && chown -R dev:dev /opt/clau-tools /var/log/clau \
     && chmod 755 /etc/clau /etc/clau/hooks \
-    && chmod 1777 /var/log/clau
+    && chmod 755 /var/log/clau /run/clau-secrets
 
 # ─── DEV SCRATCHPAD ─────────────────────────────────────────
 # Append one-liners here while iterating. Everything above stays
@@ -175,7 +174,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     pip install --break-system-packages yq
 # ────────────────────────────────────────────────────────────
 
-USER dev
+USER root
 WORKDIR /workspace
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"]

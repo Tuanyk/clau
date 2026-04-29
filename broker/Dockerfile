@@ -4,13 +4,12 @@
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl ca-certificates iptables ipset dnsutils dnsmasq-base sudo \
+        curl ca-certificates iptables ipset dnsutils dnsmasq-base gosu \
     && rm -rf /var/lib/apt/lists/*
 
-# Non-root broker user. Sudo only for init-firewall.sh.
-RUN useradd --uid 1000 -ms /bin/bash broker \
-    && echo "broker ALL=(ALL) NOPASSWD: /usr/local/bin/init-firewall.sh" \
-        >> /etc/sudoers
+# Non-root broker user. The entrypoint starts as root for firewall setup, then
+# drops to this user before uvicorn starts.
+RUN useradd --uid 1000 -ms /bin/bash broker
 
 COPY init-firewall.sh /usr/local/bin/init-firewall.sh
 COPY broker/entrypoint.sh /entrypoint.sh
@@ -25,7 +24,7 @@ COPY broker/app /app/app
 # Per-request log file written by app.request_log; surfaced at /dashboard.
 RUN mkdir -p /var/log/broker && chown broker:broker /var/log/broker
 
-USER broker
+USER root
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

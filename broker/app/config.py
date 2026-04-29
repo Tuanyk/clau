@@ -43,12 +43,31 @@ class Meta:
         return os.environ.get("META_ACCESS_TOKEN")
 
     @property
+    def user_access_token(self) -> str | None:
+        return os.environ.get("META_USER_ACCESS_TOKEN") or self.access_token
+
+    @property
+    def page_access_token(self) -> str | None:
+        return os.environ.get("META_PAGE_ACCESS_TOKEN")
+
+    @property
+    def page_id(self) -> str | None:
+        return os.environ.get("META_PAGE_ID")
+
+    @property
+    def instagram_business_account_id(self) -> str | None:
+        return (
+            os.environ.get("META_INSTAGRAM_BUSINESS_ACCOUNT_ID")
+            or os.environ.get("META_IG_USER_ID")
+        )
+
+    @property
     def graph_version(self) -> str:
         return os.environ.get("META_GRAPH_VERSION", "v21.0")
 
     @property
     def configured(self) -> bool:
-        return bool(self.access_token)
+        return bool(self.access_token or self.user_access_token or self.page_access_token)
 
 
 class GoogleAds:
