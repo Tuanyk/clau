@@ -25,6 +25,8 @@ usage() {
   cat <<'EOF'
 Usage:
   clau [options]
+  clau profiles [list]
+  clau profiles delete PROFILE [--claude|--codex|--all] [-y|--yes]
 
 Options:
   --claude         Start Claude directly instead of opening a shell.
@@ -45,6 +47,8 @@ Common examples:
   clau --codex
   clau --claude --yolo
   clau --codex --yolo
+  clau profiles
+  clau profiles delete work --codex
   clau --no-firewall
   CLAU_WITH_CODEX_AUTH=1 clau
   CLAU_PORTS=auto:3000,auto:5173 clau
@@ -84,6 +88,12 @@ Auth profiles:
     clau --profile work --claude
     clau --profile work --codex
 
+  List/delete auth profiles:
+    clau profiles
+    clau profiles delete work
+    clau profiles delete work --claude
+    clau profiles delete work --codex
+
 Secret locations:
   ~/.clau/secrets/<project>/broker/
       Broker-only provider credentials. Use this for Meta, Google Ads, GA4,
@@ -111,6 +121,11 @@ EOF
 }
 
 # ─── Parse flags ────────────────────────────────────────────
+if [[ "${1:-}" == "profiles" || "${1:-}" == "profile" ]]; then
+  shift
+  exec "$CONFIG_DIR/clau-profiles" "$@"
+fi
+
 if ! declare -F clau_auth_profile_normalize >/dev/null 2>&1; then
   echo "❌ Auth profile helper not found: $CONFIG_DIR/auth-profile.sh"
   exit 1

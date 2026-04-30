@@ -9,6 +9,7 @@ Run Claude Code and OpenAI Codex inside a Docker container. Per-project firewall
 clau-update         # refresh Claude Code + Codex CLI using cached Docker layers
 clau-login          # one-time Claude OAuth login (stored in `claude-auth`)
 codex-login         # one-time Codex ChatGPT login (stored in `codex-auth`)
+clau profiles       # list Claude/Codex auth profiles
 ```
 
 `clau-login` and `codex-login` enable the host browser bridge by default: if the
@@ -30,6 +31,7 @@ clau --codex        # open Codex directly
 clau --profile work --claude # use named auth profile
 clau --claude --yolo # open Claude with --dangerously-skip-permissions
 clau --codex --yolo  # open Codex with --dangerously-bypass-approvals-and-sandbox
+clau profiles delete work --codex # delete one auth profile volume
 clau --no-firewall  # debug mode
 clau --help         # show options, env vars, secret paths, and allowlists
 ```
@@ -101,6 +103,16 @@ codex-login --profile work
 clau --profile work --claude
 clau --profile work --codex
 CLAU_PROFILE=work clau --codex
+```
+
+List or delete auth profiles with:
+
+```bash
+clau profiles
+clau profiles delete work        # deletes Claude + Codex auth volumes for work
+clau profiles delete work --claude
+clau profiles delete work --codex
+clau profiles delete default --all --yes
 ```
 
 Codex models can differ by auth mode and rollout. `gpt-5.5` is available in

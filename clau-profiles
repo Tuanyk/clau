@@ -1,0 +1,269 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}")"
+CONFIG_DIR="$(dirname "$SCRIPT_PATH")"
+CLAUDE_AUTH_VOLUME_BASE="claude-auth"
+CODEX_AUTH_VOLUME_BASE="codex-auth"
+[[ -f "$CONFIG_DIR/auth-profile.sh" ]] && source "$CONFIG_DIR/auth-profile.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  clau-profiles [list]
+  clau-profiles delete PROFILE [--claude|--codex|--all] [-y|--yes]
+
+Commands:
+  list                  List existing Claude/Codex auth profiles (default).
+  delete PROFILE        Delete auth volume(s) for a profile.
+  rm PROFILE            Alias for delete.
+
+Delete options:
+  --claude              Delete only the Claude auth volume.
+  --codex               Delete only the Codex auth volume.
+  --all                 Delete both auth volumes for the profile (default).
+  -y, --yes             Do not prompt for confirmation.
+  -h, --help            Show this help and exit.
+
+Examples:
+  clau-profiles
+  clau-profiles delete work
+  clau-profiles delete work --codex
+  clau-profiles delete default --all --yes
+EOF
+}
+
+if ! declare -F clau_auth_profile_normalize >/dev/null 2>&1; then
+  echo "Error: auth profile helper not found: $CONFIG_DIR/auth-profile.sh" >&2
+  exit 1
+fi
+
+require_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "Error: Docker CLI not found." >&2
+    exit 1
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    echo "Error: cannot reach the Docker daemon." >&2
+    exit 1
+  fi
+}
+
+list_profiles() {
+  local volumes rows
+
+  if ! volumes="$(docker volume ls --format '{{.Name}}' 2>/dev/null)"; then
+    echo "Error: could not list Docker volumes." >&2
+    exit 1
+  fi
+
+  rows="$(
+    printf '%s\n' "$volumes" \
+      | awk -v claude_base="$CLAUDE_AUTH_VOLUME_BASE" -v codex_base="$CODEX_AUTH_VOLUME_BASE" '
+          $0 == claude_base {
+            print "default\tclaude\t" $0
+            next
+          }
+          index($0, claude_base "-") == 1 {
+            profile = substr($0, length(claude_base) + 2)
+            if (profile != "") print profile "\tclaude\t" $0
+            next
+          }
+          $0 == codex_base {
+            print "default\tcodex\t" $0
+            next
+          }
+          index($0, codex_base "-") == 1 {
+            profile = substr($0, length(codex_base) + 2)
+            if (profile != "") print profile "\tcodex\t" $0
+            next
+          }
+        ' \
+      | awk '
+          BEGIN { FS = "\t"; OFS = "\t" }
+          {
+            profiles[$1] = 1
+            if ($2 == "claude") claude[$1] = $3
+            if ($2 == "codex") codex[$1] = $3
+          }
+          END {
+            for (profile in profiles) {
+              key = (profile == "default") ? "0" : "1" profile
+              print key, profile, ((profile in claude) ? claude[profile] : "-"), ((profile in codex) ? codex[profile] : "-")
+            }
+          }
+        '
+  )"
+
+  if [[ -z "$rows" ]]; then
+    echo "No Claude/Codex auth profiles found."
+    return 0
+  fi
+
+  printf '%-24s %-32s %-32s\n' "PROFILE" "CLAUDE" "CODEX"
+  printf '%s\n' "$rows" \
+    | sort -t $'\t' -k1,1 \
+    | while IFS=$'\t' read -r _ profile claude_volume codex_volume; do
+        printf '%-24s %-32s %-32s\n' "$profile" "$claude_volume" "$codex_volume"
+      done
+}
+
+confirm_delete() {
+  local profile="$1"
+  local answer
+
+  printf "Delete these auth volume(s)? Type '%s' to confirm: " "$profile"
+  if ! IFS= read -r answer; then
+    echo
+    echo "Aborted."
+    exit 1
+  fi
+
+  if [[ "$answer" != "$profile" ]]; then
+    echo "Aborted."
+    exit 0
+  fi
+}
+
+delete_profile() {
+  local raw_profile="${1:-}"
+  local profile raw_lower
+  local delete_claude=0
+  local delete_codex=0
+  local saw_scope=0
+  local assume_yes=0
+  local volume
+  local targets=()
+  local existing=()
+
+  if [[ -z "$raw_profile" ]]; then
+    echo "Error: delete requires a profile name." >&2
+    usage
+    exit 1
+  fi
+  shift
+
+  while (($#)); do
+    case "$1" in
+      --claude)
+        delete_claude=1
+        saw_scope=1
+        ;;
+      --codex)
+        delete_codex=1
+        saw_scope=1
+        ;;
+      --all)
+        delete_claude=1
+        delete_codex=1
+        saw_scope=1
+        ;;
+      -y|--yes)
+        assume_yes=1
+        ;;
+      -h|--help|help)
+        usage
+        exit 0
+        ;;
+      *)
+        echo "Error: unknown delete option: $1" >&2
+        usage
+        exit 1
+        ;;
+    esac
+    shift
+  done
+
+  if [[ "$saw_scope" -eq 0 ]]; then
+    delete_claude=1
+    delete_codex=1
+  fi
+
+  profile="$(clau_auth_profile_normalize "$raw_profile")"
+  raw_lower="$(printf '%s' "$raw_profile" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$profile" == "default" && "$raw_lower" != "default" ]]; then
+    echo "Error: '$raw_profile' resolves to the default profile. Use 'default' explicitly to delete it." >&2
+    exit 1
+  fi
+
+  if [[ "$delete_claude" -eq 1 ]]; then
+    targets+=("$(clau_auth_volume_name "$CLAUDE_AUTH_VOLUME_BASE" "$profile")")
+  fi
+  if [[ "$delete_codex" -eq 1 ]]; then
+    targets+=("$(clau_auth_volume_name "$CODEX_AUTH_VOLUME_BASE" "$profile")")
+  fi
+
+  for volume in "${targets[@]}"; do
+    if docker volume inspect "$volume" >/dev/null 2>&1; then
+      existing+=("$volume")
+    fi
+  done
+
+  if [[ "${#existing[@]}" -eq 0 ]]; then
+    echo "No matching auth volumes found for profile: $profile"
+    exit 0
+  fi
+
+  if [[ "$raw_profile" != "$profile" ]]; then
+    echo "Profile: $raw_profile -> $profile"
+  else
+    echo "Profile: $profile"
+  fi
+  echo "Volumes to delete:"
+  for volume in "${existing[@]}"; do
+    echo "  $volume"
+  done
+
+  if [[ "$assume_yes" -ne 1 ]]; then
+    confirm_delete "$profile"
+  fi
+
+  if docker volume rm "${existing[@]}"; then
+    echo "Deleted ${#existing[@]} auth volume(s)."
+  else
+    echo "Error: failed to delete one or more auth volumes." >&2
+    exit 1
+  fi
+}
+
+main() {
+  local command="${1:-list}"
+
+  case "$command" in
+    -h|--help|help)
+      usage
+      exit 0
+      ;;
+    list|ls)
+      shift || true
+      if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
+        usage
+        exit 0
+      fi
+      if (($#)); then
+        echo "Error: list does not accept extra arguments." >&2
+        usage
+        exit 1
+      fi
+      require_docker
+      list_profiles
+      ;;
+    delete|rm|remove|--delete)
+      shift
+      if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
+        usage
+        exit 0
+      fi
+      require_docker
+      delete_profile "$@"
+      ;;
+    *)
+      echo "Error: unknown command: $command" >&2
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
