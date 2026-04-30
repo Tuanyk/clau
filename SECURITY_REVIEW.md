@@ -120,8 +120,10 @@ drop to the `broker` user before starting `uvicorn`.
 
 The launcher no longer mounts both Claude and Codex auth volumes by default.
 
-- normal shell / `clau --claude`: mounts `claude-auth`
-- `clau --codex`: mounts `codex-auth`
+- normal shell / `clau --claude`: mounts the selected Claude auth profile volume
+- `clau --codex`: mounts the selected Codex auth profile volume
+- default profile volumes remain `claude-auth` and `codex-auth`; named profiles
+  use `claude-auth-<profile>` and `codex-auth-<profile>`
 - `CLAU_WITH_CODEX_AUTH=1`: explicitly mount Codex auth in normal shell / Claude mode
 - `CLAU_WITHOUT_AUTH=1`: mount neither auth volume
 

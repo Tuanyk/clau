@@ -51,16 +51,10 @@ ARG USER_GID=1000
 RUN groupadd --gid $USER_GID dev 2>/dev/null || true \
     && useradd --uid $USER_UID --gid $USER_GID -ms /bin/bash dev
 
-# Native Claude Code (trước khi switch user để có quyền)
 USER dev
 WORKDIR /home/dev
-RUN curl -fsSL https://claude.ai/install.sh | bash
 RUN mkdir -p /home/dev/.pip-user/bin /home/dev/.codex /home/dev/.history-store /home/dev/.npm
 ENV PATH="/opt/clau-tools/bin:/home/dev/.pip-user/bin:/home/dev/.local/bin:${PATH}"
-
-# OpenAI Codex CLI. Auth is persisted separately via the codex-auth Docker volume.
-USER root
-RUN npm install -g @openai/codex@latest
 
 # ─── Pip toolbelt (baked into image) ────────────────────────
 # Installed system-wide (/usr/local/lib/python3.*/dist-packages) so the
@@ -173,6 +167,20 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     pip install --break-system-packages yq
 # ────────────────────────────────────────────────────────────
+
+# ─── AI CLIs (final cached tail; refresh with clau-update) ────
+# Keep these near the end so `clau-update` can cache-bust only this tail instead
+# of rebuilding the whole toolbelt image.
+ARG CLAU_CLI_REFRESH=initial
+
+USER dev
+WORKDIR /home/dev
+RUN echo "clau CLI refresh: ${CLAU_CLI_REFRESH}" \
+    && curl -fsSL https://claude.ai/install.sh | bash
+
+USER root
+RUN echo "clau CLI refresh: ${CLAU_CLI_REFRESH}" \
+    && npm install -g @openai/codex@latest
 
 USER root
 WORKDIR /workspace

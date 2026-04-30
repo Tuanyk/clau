@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IMAGE="${CLAU_IMAGE:-claude-base}"
+REFRESH="$(date -u +%Y%m%dT%H%M%SZ)"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  clau-update
+
+Rebuild only the cached main image tail that installs Claude Code and Codex CLI.
+This leaves auth volumes, project data, pip/npm/tool volumes, and broker image
+untouched.
+EOF
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help|help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "❌ Unknown option: $arg"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+echo "📦 Updating Claude Code and Codex CLI in image: $IMAGE"
+echo "   Cache bust: $REFRESH"
+
+DOCKER_BUILDKIT=1 docker build \
+  --build-arg USER_UID="$(id -u)" \
+  --build-arg USER_GID="$(id -g)" \
+  --build-arg CLAU_CLI_REFRESH="$REFRESH" \
+  -t "$IMAGE" \
+  "$SCRIPT_DIR"
+
+echo "✓ Updated $IMAGE. Restart running clau containers to use the new CLIs."

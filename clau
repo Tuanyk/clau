@@ -5,8 +5,8 @@ set -euo pipefail
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}")"
 CONFIG_DIR="$(dirname "$SCRIPT_PATH")"
 IMAGE="claude-base"
-CLAUDE_AUTH_VOLUME="claude-auth"
-CODEX_AUTH_VOLUME="codex-auth"
+CLAUDE_AUTH_VOLUME_BASE="claude-auth"
+CODEX_AUTH_VOLUME_BASE="codex-auth"
 PIP_VOLUME="clau-pip"
 NPM_VOLUME="clau-npm"
 TOOLS_VOLUME="clau-tools"
@@ -19,6 +19,7 @@ ALLOWLISTS_DIR="${CLAU_ALLOWLISTS_DIR:-$HOME/.clau/allowlists}"
 TEMPLATES_DIR="$CONFIG_DIR/templates"
 DEFAULT_ALLOWLIST="$CONFIG_DIR/allowlist.txt"
 [[ -f "$CONFIG_DIR/browser-bridge.sh" ]] && source "$CONFIG_DIR/browser-bridge.sh"
+[[ -f "$CONFIG_DIR/auth-profile.sh" ]] && source "$CONFIG_DIR/auth-profile.sh"
 
 usage() {
   cat <<'EOF'
@@ -29,6 +30,7 @@ Options:
   --claude         Start Claude directly instead of opening a shell.
   --codex          Start Codex directly instead of opening a shell.
   --browser        Let container browser-open requests use the host browser.
+  --profile NAME   Use named Claude/Codex auth volumes. Default: default.
   --yolo           Skip tool approvals/sandbox prompts for Claude or Codex.
   --no-firewall    Disable the main AI container URL allowlist for this run.
                    The broker sidecar still keeps its own firewall.
@@ -38,6 +40,7 @@ Common examples:
   clau
   clau --browser
   clau --claude
+  clau --claude --profile work
   clau --claude --browser
   clau --codex
   clau --claude --yolo
@@ -49,6 +52,7 @@ Common examples:
 
 Important env vars:
   CLAU_PROJECT_NAME          Override project/container/secrets/allowlist name.
+  CLAU_PROFILE               Default auth profile when --profile is not passed.
   CLAU_PORTS                 Port forwards. Examples: auto:3000, 3001:3000, or empty to disable.
   CLAU_LOAD_PROJECT_ENV=1    Legacy: load <project>/.env into the AI container.
   CLAU_WITH_CODEX_AUTH=1     Mount Codex auth volume in normal shell/Claude mode.
@@ -57,6 +61,28 @@ Important env vars:
   CLAU_SKIP_AUTO_DOCS=1      Do not seed CLAUDE.md / AGENTS.md into the project.
   CLAU_BROKER_DASHBOARD=1    Publish broker dashboard on 127.0.0.1.
   CLAU_BWRAP_OPTS=0          Keep Docker's default seccomp/AppArmor profiles.
+
+Auth profiles:
+  Existing logins use the default profile:
+    claude-auth -> /home/dev/.claude
+    codex-auth  -> /home/dev/.codex
+
+  Use old/default login:
+    clau --claude
+    clau --codex
+    clau --profile default --claude
+
+  Re-login old/default account:
+    clau-login
+    codex-login
+    clau-login --profile default
+    codex-login --profile default
+
+  Add and use another account:
+    clau-login --profile work
+    codex-login --profile work
+    clau --profile work --claude
+    clau --profile work --codex
 
 Secret locations:
   ~/.clau/secrets/<project>/broker/
@@ -85,13 +111,19 @@ EOF
 }
 
 # ─── Parse flags ────────────────────────────────────────────
+if ! declare -F clau_auth_profile_normalize >/dev/null 2>&1; then
+  echo "❌ Auth profile helper not found: $CONFIG_DIR/auth-profile.sh"
+  exit 1
+fi
+
 NO_FIREWALL=0
 DANGER=0
 RUN_CLAUDE=0
 RUN_CODEX=0
 HOST_BROWSER=0
-for arg in "$@"; do
-  case "$arg" in
+AUTH_PROFILE_RAW="${CLAU_PROFILE:-default}"
+while (($#)); do
+  case "$1" in
     -h|--help|help)
       usage
       exit 0
@@ -101,7 +133,21 @@ for arg in "$@"; do
     --claude) RUN_CLAUDE=1 ;;
     --codex) RUN_CODEX=1 ;;
     --browser) HOST_BROWSER=1 ;;
+    --profile)
+      shift
+      AUTH_PROFILE_RAW="$(clau_auth_parse_profile_arg "${1:-}")" || exit 1
+      ;;
+    --profile=*)
+      AUTH_PROFILE_RAW="${1#*=}"
+      AUTH_PROFILE_RAW="$(clau_auth_parse_profile_arg "$AUTH_PROFILE_RAW")" || exit 1
+      ;;
+    *)
+      echo "❌ Unknown option: $1"
+      usage
+      exit 1
+      ;;
   esac
+  shift
 done
 
 if [[ "$RUN_CLAUDE" -eq 1 && "$RUN_CODEX" -eq 1 ]]; then
@@ -112,6 +158,9 @@ if [[ "$HOST_BROWSER" -eq 1 ]] && ! declare -F clau_browser_bridge_start >/dev/n
   echo "❌ Browser bridge helper not found: $CONFIG_DIR/browser-bridge.sh"
   exit 1
 fi
+AUTH_PROFILE="$(clau_auth_profile_normalize "$AUTH_PROFILE_RAW")"
+CLAUDE_AUTH_VOLUME="$(clau_auth_volume_name "$CLAUDE_AUTH_VOLUME_BASE" "$AUTH_PROFILE")"
+CODEX_AUTH_VOLUME="$(clau_auth_volume_name "$CODEX_AUTH_VOLUME_BASE" "$AUTH_PROFILE")"
 
 # ─── Xác định dự án ─────────────────────────────────────────
 # Mặc định PROJECT_NAME lấy từ basename. Hai dự án cùng basename
@@ -131,6 +180,7 @@ PROJECT_NAME="${PROJECT_NAME%%-}"
 CONTAINER_NAME="clau-$PROJECT_NAME"
 HISTORY_VOLUME="clau-history-$PROJECT_NAME"
 echo "📁 Project: $PROJECT_NAME  ($PROJECT_DIR)"
+echo "👤 Auth profile: $AUTH_PROFILE"
 
 # ─── Seed CLAUDE.md / AGENTS.md ─────────────────────────────
 # Dùng marker <!-- clau:seed-vN --> để phát hiện "đã seed":
@@ -298,8 +348,8 @@ if ! docker image inspect "$IMAGE" &>/dev/null; then
   echo "❌ Image chưa có. Chạy: $CONFIG_DIR/install.sh"; exit 1
 fi
 
-# Auth volumes are created on demand. Use clau-login / codex-login once to
-# populate them, then credentials persist across container runs.
+# Auth volumes are created on demand. Use clau-login / codex-login with the same
+# profile once to populate them, then credentials persist across container runs.
 docker volume inspect "$CLAUDE_AUTH_VOLUME" &>/dev/null || docker volume create "$CLAUDE_AUTH_VOLUME" >/dev/null
 docker volume inspect "$CODEX_AUTH_VOLUME" &>/dev/null || docker volume create "$CODEX_AUTH_VOLUME" >/dev/null
 

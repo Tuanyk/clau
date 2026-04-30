@@ -5,7 +5,8 @@ Run Claude Code and OpenAI Codex inside a Docker container. Per-project firewall
 ## Install
 
 ```bash
-./install.sh        # builds the image, symlinks `clau`, `clau-login`, `codex-login`, `clau-restore`
+./install.sh        # builds the image, symlinks `clau`, `clau-update`, login helpers, restore
+clau-update         # refresh Claude Code + Codex CLI using cached Docker layers
 clau-login          # one-time Claude OAuth login (stored in `claude-auth`)
 codex-login         # one-time Codex ChatGPT login (stored in `codex-auth`)
 ```
@@ -13,6 +14,10 @@ codex-login         # one-time Codex ChatGPT login (stored in `codex-auth`)
 `clau-login` and `codex-login` enable the host browser bridge by default: if the
 CLI tries to open a login URL, your normal desktop browser opens it. Use
 `--no-browser` to disable that and copy URLs manually.
+
+`clau-update` rebuilds only the final Dockerfile tail that installs Claude Code
+and Codex CLI. It does not rebuild the broker image and does not touch auth,
+history, pip, npm, or tool volumes. Restart running `clau` containers afterward.
 
 ## Run
 
@@ -22,6 +27,7 @@ clau                # shell in the container; run `claude` or `codex`
 clau --claude       # open Claude directly
 clau --browser      # shell; browser-open requests go to the host browser
 clau --codex        # open Codex directly
+clau --profile work --claude # use named auth profile
 clau --claude --yolo # open Claude with --dangerously-skip-permissions
 clau --codex --yolo  # open Codex with --dangerously-bypass-approvals-and-sandbox
 clau --no-firewall  # debug mode
@@ -71,8 +77,10 @@ Then `~/.clau/secrets/my-app-personal/`, `~/.clau/allowlists/my-app-personal.txt
 Claude and Codex credentials are intentionally separate:
 
 ```text
-claude-auth -> /home/dev/.claude
-codex-auth  -> /home/dev/.codex
+claude-auth          -> /home/dev/.claude
+codex-auth           -> /home/dev/.codex
+claude-auth-<profile> -> /home/dev/.claude
+codex-auth-<profile>  -> /home/dev/.codex
 ```
 
 This keeps OAuth/session credentials inside Docker volumes instead of using your host API keys. The launcher intentionally blanks `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` for the container, even if they exist on the host or in an env file, so Claude/Codex do not inherit long-lived API keys.
@@ -83,10 +91,22 @@ Set `CLAU_WITH_CODEX_AUTH=1` if you explicitly need Codex auth in a normal shell
 or Claude run, or `CLAU_WITHOUT_AUTH=1` for a shell with neither auth volume
 mounted.
 
+The default profile keeps using the original `claude-auth` and `codex-auth`
+volumes, so existing logins continue to work. Use named profiles to rotate
+between accounts:
+
+```bash
+clau-login --profile work
+codex-login --profile work
+clau --profile work --claude
+clau --profile work --codex
+CLAU_PROFILE=work clau --codex
+```
+
 Codex models can differ by auth mode and rollout. `gpt-5.5` is available in
 Codex only when it appears for the signed-in ChatGPT account; API-key auth
 does not expose it. If it does not appear yet, use `gpt-5.4` and rebuild later
-with `./install.sh` to pick up the newest Codex CLI.
+with `clau-update` to pick up the newest Codex CLI.
 
 ## Snapshots and recovery
 
@@ -345,8 +365,8 @@ One domain per line. The container can only reach hosts on the allowlist for HTT
 
 | Volume | Purpose | Scope |
 |---|---|---|
-| `claude-auth` | Claude OAuth session | global |
-| `codex-auth` | Codex ChatGPT/API auth and Codex config | global |
+| `claude-auth`, `claude-auth-<profile>` | Claude OAuth session | global per profile |
+| `codex-auth`, `codex-auth-<profile>` | Codex ChatGPT/API auth and Codex config | global per profile |
 | `clau-pip` | pip-installed Python packages | global, all projects |
 | `clau-tools` | dev tools (Headroom, Caveman, ...) | global, all projects |
 | `clau-history-<project>` | bash history | per-project |

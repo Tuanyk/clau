@@ -21,12 +21,14 @@ DOCKER_BUILDKIT=1 docker build \
 
 mkdir -p "$LINK_DIR" "$HOME/.clau/secrets" "$HOME/.clau/allowlists"
 chmod +x "$SCRIPT_DIR/clau" "$SCRIPT_DIR/clau-login" "$SCRIPT_DIR/codex-login" \
+         "$SCRIPT_DIR/clau-update" \
          "$SCRIPT_DIR/clau-restore" \
          "$SCRIPT_DIR/entrypoint.sh" "$SCRIPT_DIR/init-firewall.sh" \
          "$SCRIPT_DIR/broker/entrypoint.sh"
 ln -sf "$SCRIPT_DIR/clau" "$LINK_DIR/clau"
 ln -sf "$SCRIPT_DIR/clau-login" "$LINK_DIR/clau-login"
 ln -sf "$SCRIPT_DIR/codex-login" "$LINK_DIR/codex-login"
+ln -sf "$SCRIPT_DIR/clau-update" "$LINK_DIR/clau-update"
 ln -sf "$SCRIPT_DIR/clau-restore" "$LINK_DIR/clau-restore"
 
 if [[ ":$PATH:" != *":$LINK_DIR:"* ]]; then
@@ -40,13 +42,15 @@ cat <<EOF
 ✓ Xong. Tiếp theo:
    1. clau-login                  # Claude login (1 lần; mở URL bằng browser host nếu có)
    2. codex-login                 # Codex ChatGPT login (1 lần; mở URL bằng browser host nếu có)
-   3. cd ~/work/du-an && clau     # chạy shell (mặc định có firewall)
-   4. clau --browser              # shell + mở browser trên host khi container cần
-   5. clau --claude               # mở Claude trực tiếp trong container
-   6. clau --codex                # mở Codex trực tiếp trong container
-   7. clau --claude --yolo        # Claude + --dangerously-skip-permissions
-   8. clau --codex --yolo         # Codex + bypass sandbox/approvals trong container
-   9. clau --no-firewall          # tắt firewall (debug)
+   3. clau-update                 # cập nhật Claude/Codex CLI bằng cache Docker
+   4. cd ~/work/du-an && clau     # chạy shell (mặc định có firewall)
+   5. clau --profile work         # dùng auth profile khác
+   6. clau --browser              # shell + mở browser trên host khi container cần
+   7. clau --claude               # mở Claude trực tiếp trong container
+   8. clau --codex                # mở Codex trực tiếp trong container
+   9. clau --claude --yolo        # Claude + --dangerously-skip-permissions
+  10. clau --codex --yolo         # Codex + bypass sandbox/approvals trong container
+  11. clau --no-firewall          # tắt firewall (debug)
 
 Allowlist mặc định: $SCRIPT_DIR/allowlist.txt
 Override theo dự án: $HOME/.clau/allowlists/<ten-du-an>.txt
