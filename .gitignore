@@ -8,6 +8,7 @@ allowlists/
 .codex/
 .claude/
 .clau/
+temp/
 __pycache__/
 *.pyc
 *.pyo
