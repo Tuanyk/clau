@@ -1,11 +1,66 @@
 # clau
 
-Run Claude Code and OpenAI Codex inside a Docker container. Per-project firewall, persistent auth, persistent shell history, and shared tool/package volumes so AI-installed tools survive across sessions.
+`clau` runs Claude Code and OpenAI Codex inside a Docker container with a
+project-aware launcher around them: firewall allowlists, isolated auth
+profiles, persistent shell history, reusable tool/package volumes, host-browser
+login support, pre-run snapshots, and an optional sidecar broker for sensitive
+third-party credentials.
+
+It is for people who want the convenience of `claude` and `codex`, but do not
+want every agent session to run directly in their normal host shell with broad
+access to local environment variables, network egress, auth files, and installed
+tools.
+
+## Why this exists
+
+Bare `claude` or `codex` is fast and simple, but it usually runs in the same
+environment as the developer:
+
+- The project directory is live and easy to mutate.
+- Host environment variables may be inherited accidentally.
+- Network access is whatever the host allows.
+- Login state, tools, package installs, and shell history are mixed with the
+  user's normal machine state.
+- Multiple accounts or client contexts are awkward to keep separate.
+- Long-lived provider credentials can end up inside the same process that is
+  generating and executing commands.
+
+`clau` was coded to put a repeatable boundary around those workflows. It does
+not make AI coding risk-free, but it gives each project a more controlled
+runtime and makes the safe path easier to use every day.
+
+## Why use clau instead of bare Claude/Codex?
+
+| Area | Bare `claude` / `codex` | `clau` |
+|---|---|---|
+| Runtime | Runs directly on the host | Runs in a Docker container |
+| Network | Host-level outbound access | HTTPS allowlist per project, plus broker-specific allowlist |
+| Auth | CLI auth lives in the normal user profile | Docker volumes per tool and per profile |
+| Account switching | Manual re-login or custom setup | `--profile`, `clau-login --profile`, `codex-login --profile` |
+| Secrets | Easy to expose through env/files if mounted | Secret paths, guard hooks, managed Claude settings, optional broker |
+| Provider API keys | Usually inside the agent runtime | Optional broker sidecar keeps provider keys outside the AI container |
+| Recovery | Depends on git or manual backups | Host-side snapshot before fresh container start |
+| Tools/packages | Installed into host or project | Persistent shared volumes: `clau-pip`, `clau-tools`, `clau-npm` |
+| Browser login | CLI decides how to open URLs | Host browser bridge for OAuth/device login |
+| Project context | Manual instructions per repo | Auto-seeded `CLAUDE.md` and `AGENTS.md` guidance |
+
+## Main features
+
+- One command for a containerized coding shell: `clau`.
+- Direct launch modes: `clau --claude` and `clau --codex`.
+- Named auth profiles for Claude and Codex.
+- Profile listing and deletion: `clau profiles`.
+- Per-project firewall allowlist.
+- Pre-run snapshots with `clau-restore`.
+- Host-browser bridge for login and browser-open requests.
+- Persistent pip/npm/tool volumes shared across projects.
+- Optional broker sidecar for Meta, GA4, GSC, GTM, and Google Ads credentials.
+- Auto-seeded `CLAUDE.md` and `AGENTS.md` instructions for each project.
 
 ## Install
 
 ```bash
-./install.sh        # builds the image, symlinks `clau`, `clau-update`, login helpers, restore
+./install.sh        # build images and symlink commands into ~/.local/bin
 clau-update         # refresh Claude Code + Codex CLI using cached Docker layers
 clau-login          # one-time Claude OAuth login (stored in `claude-auth`)
 codex-login         # one-time Codex ChatGPT login (stored in `codex-auth`)
@@ -20,21 +75,116 @@ CLI tries to open a login URL, your normal desktop browser opens it. Use
 and Codex CLI. It does not rebuild the broker image and does not touch auth,
 history, pip, npm, or tool volumes. Restart running `clau` containers afterward.
 
-## Run
+## Quick start
 
 ```bash
 cd ~/path/to/project
-clau                # shell in the container; run `claude` or `codex`
-clau --claude       # open Claude directly
-clau --browser      # shell; browser-open requests go to the host browser
-clau --codex        # open Codex directly
-clau --profile work --claude # use named auth profile
-clau --claude --yolo # open Claude with --dangerously-skip-permissions
-clau --codex --yolo  # open Codex with --dangerously-bypass-approvals-and-sandbox
-clau profiles delete work --codex # delete one auth profile volume
-clau --no-firewall  # debug mode
-clau --help         # show options, env vars, secret paths, and allowlists
+clau
 ```
+
+That starts or attaches to a project container and drops you into a shell. From
+there you can run `claude`, `codex`, tests, package managers, build tools, and
+normal shell commands inside the container.
+
+Common commands:
+
+```bash
+clau                         # shell in the container
+clau --claude                # open Claude directly
+clau --codex                 # open Codex directly
+clau --browser               # shell with host-browser bridge
+clau --profile work --claude # use a named auth profile
+clau --profile work --codex
+clau --claude --yolo         # Claude + --dangerously-skip-permissions
+clau --codex --yolo          # Codex + bypass sandbox/approvals
+clau --no-firewall           # debug without the main AI container allowlist
+clau --help                  # show all options and important env vars
+```
+
+## Auth profiles
+
+Claude and Codex credentials are intentionally separate:
+
+```text
+claude-auth            -> /home/dev/.claude
+codex-auth             -> /home/dev/.codex
+claude-auth-<profile>  -> /home/dev/.claude
+codex-auth-<profile>   -> /home/dev/.codex
+```
+
+The default profile keeps using the original `claude-auth` and `codex-auth`
+volumes, so existing logins continue to work. Use named profiles to rotate
+between accounts or clients:
+
+```bash
+clau-login --profile work
+codex-login --profile work
+clau --profile work --claude
+clau --profile work --codex
+CLAU_PROFILE=work clau --codex
+```
+
+List or delete auth profiles:
+
+```bash
+clau profiles
+clau profiles delete work        # delete Claude + Codex auth volumes for work
+clau profiles delete work --claude
+clau profiles delete work --codex
+clau profiles delete default --all --yes
+```
+
+By default, a normal shell or Claude run mounts only the selected Claude auth
+volume. `clau --codex` mounts only the selected Codex auth volume. Set
+`CLAU_WITH_CODEX_AUTH=1` if you explicitly need Codex auth in a normal shell or
+Claude run, or `CLAU_WITHOUT_AUTH=1` for a shell with neither auth volume.
+
+The launcher intentionally blanks `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` for
+the AI container, even if they exist on the host or in an env file. This keeps
+the CLIs on their OAuth/session auth path instead of accidentally inheriting
+long-lived host API keys.
+
+## Ports and browser bridge
+
+By default, `clau` maps the first free host port starting at `13000` to port
+`3000` inside the container. A dev server can still listen on `3000` inside the
+container; open the host port printed by `clau`, for example
+`http://localhost:13000`.
+
+```bash
+CLAU_PORTS=auto:3000 clau          # first free host port from 13000 -> container 3000
+CLAU_PORTS=3001:3000 clau          # fixed host localhost:3001 -> container 3000
+CLAU_PORTS=auto:3000,auto:5173 clau
+CLAU_DEFAULT_HOST_PORT=14000 clau  # change the auto-search starting point
+CLAU_PORTS="" clau                 # no forwarded ports
+```
+
+`clau --browser` does not install a GUI browser inside Docker. It sets
+`BROWSER` and an `xdg-open` shim in the container, then opens requested URLs on
+the host. If a project container is already running, stop it first; Docker
+cannot add the browser bridge mount to an existing container.
+
+## Project identity
+
+`clau` prints the resolved project name + path on startup:
+
+```
+📁 Project: my-app  (/home/you/work/my-app)
+```
+
+The project name is the lowercased basename of the cwd, so `~/work/my-app` and
+`~/personal/my-app` share `~/.clau/secrets/`, `~/.clau/allowlists/`, container,
+and history. To disambiguate, override with `CLAU_PROJECT_NAME`:
+
+```bash
+cd ~/personal/my-app && CLAU_PROJECT_NAME=my-app-personal clau
+```
+
+Then clau uses `~/.clau/secrets/my-app-personal/`,
+`~/.clau/allowlists/my-app-personal.txt`, container
+`clau-my-app-personal`, and matching history/snapshot names.
+
+## Codex compatibility on Linux
 
 On Linux, `clau` starts the Docker container with
 `--security-opt seccomp=unconfined --security-opt apparmor=unconfined` so
@@ -45,80 +195,9 @@ turn those Docker options off for debugging:
 CLAU_BWRAP_OPTS=0 clau
 ```
 
-`clau --browser` does not install a GUI browser inside Docker. It sets
-`BROWSER` and an `xdg-open` shim in the container, then opens requested URLs on
-the host. If a project container is already running, stop it first; Docker
-cannot add the browser bridge mount to an existing container.
-
-By default, `clau` maps the first free host port starting at `13000` to port
-`3000` inside the container. Next.js can still listen on `3000`; open the host
-port printed by `clau`, for example `http://localhost:13000`.
-
-```bash
-CLAU_PORTS=auto:3000 clau          # first free host port from 13000 -> container 3000
-CLAU_PORTS=3001:3000 clau          # fixed host localhost:3001 -> container 3000
-CLAU_PORTS=auto:3000,auto:5173 clau
-CLAU_DEFAULT_HOST_PORT=14000 clau  # change the auto-search starting point
-CLAU_PORTS="" clau                 # no forwarded ports
-```
-
-`clau` prints the resolved project name + path on startup:
-
-```
-📁 Project: my-app  (/home/you/work/my-app)
-```
-
-The project name is the lowercased basename of the cwd — so `~/work/my-app` and `~/personal/my-app` share `~/.clau/secrets/`, `~/.clau/allowlists/`, container, and history. To disambiguate, override with `CLAU_PROJECT_NAME`:
-
-```bash
-cd ~/personal/my-app && CLAU_PROJECT_NAME=my-app-personal clau
-```
-
-Then `~/.clau/secrets/my-app-personal/`, `~/.clau/allowlists/my-app-personal.txt`, container `clau-my-app-personal`, etc.
-
-Claude and Codex credentials are intentionally separate:
-
-```text
-claude-auth          -> /home/dev/.claude
-codex-auth           -> /home/dev/.codex
-claude-auth-<profile> -> /home/dev/.claude
-codex-auth-<profile>  -> /home/dev/.codex
-```
-
-This keeps OAuth/session credentials inside Docker volumes instead of using your host API keys. The launcher intentionally blanks `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` for the container, even if they exist on the host or in an env file, so Claude/Codex do not inherit long-lived API keys.
-
-By default, a normal shell/Claude run mounts only `claude-auth`; `clau --claude`
-also mounts only `claude-auth`, while `clau --codex` mounts only `codex-auth`.
-Set `CLAU_WITH_CODEX_AUTH=1` if you explicitly need Codex auth in a normal shell
-or Claude run, or `CLAU_WITHOUT_AUTH=1` for a shell with neither auth volume
-mounted.
-
-The default profile keeps using the original `claude-auth` and `codex-auth`
-volumes, so existing logins continue to work. Use named profiles to rotate
-between accounts:
-
-```bash
-clau-login --profile work
-codex-login --profile work
-clau --profile work --claude
-clau --profile work --codex
-CLAU_PROFILE=work clau --codex
-```
-
-List or delete auth profiles with:
-
-```bash
-clau profiles
-clau profiles delete work        # deletes Claude + Codex auth volumes for work
-clau profiles delete work --claude
-clau profiles delete work --codex
-clau profiles delete default --all --yes
-```
-
-Codex models can differ by auth mode and rollout. `gpt-5.5` is available in
-Codex only when it appears for the signed-in ChatGPT account; API-key auth
-does not expose it. If it does not appear yet, use `gpt-5.4` and rebuild later
-with `clau-update` to pick up the newest Codex CLI.
+Codex model availability depends on the installed Codex CLI version and the
+signed-in account. Run `clau-update` to refresh the CLI layer without touching
+auth, history, pip, npm, or tool volumes.
 
 ## Snapshots and recovery
 
@@ -231,7 +310,7 @@ The appended section tells the AI:
 - Reference secrets **by name** in code, never print/log/cat their values.
 - The container is firewalled — domains not in `allowlist.txt` will fail.
 - If `BROKER_URL` is set, call the sidecar broker instead of provider APIs directly.
-- pip and `/opt/clau-tools/bin` persist across sessions.
+- pip, npm cache, and `/opt/clau-tools/bin` persist across sessions.
 
 To customize, edit `templates/CLAUDE.md` and `templates/AGENTS.md` in the clau install dir (affects future projects) or the file inside the project (that project only). **Keep the `<!-- clau:seed-v1 -->` marker comment** — deleting it will cause clau to append the section again on the next run. To disable seeding entirely, `export CLAU_SKIP_AUTO_DOCS=1`.
 
@@ -247,14 +326,18 @@ You'll usually want to add a per-project **Secrets** section that names the env 
 
 That tells the AI (1) what's available, (2) the exact variable names to use, and (3) not to leak the values into the chat or logs.
 
-## Python packages persist
+## Python and npm packages persist
 
 `pip install <anything>` inside the container goes into the shared `clau-pip` Docker volume (mounted at `/home/dev/.pip-user`). Packages survive container restarts and are shared across all projects.
+
+The container also mounts a shared `clau-npm` volume at `/home/dev/.npm`, so npm
+cache data survives container restarts.
 
 To wipe and start fresh:
 
 ```bash
 docker volume rm clau-pip
+docker volume rm clau-npm
 ```
 
 ## Adding tools later (Headroom, Caveman, etc.)
@@ -276,13 +359,13 @@ docker volume rm clau-tools
 
 Once a tool is proven, "promote" it by adding the install command to the `Dockerfile` and rebuilding.
 
-## Sidecar broker (keep API keys out of Claude's container)
+## Sidecar broker (keep API keys out of the AI container)
 
 For long-lived third-party credentials — Meta access tokens, Google
 service-account JSON, Google Ads developer/refresh tokens — the
 defense-in-depth layers below are *not enough*. Anything that lives in
-Claude's address space can theoretically be encoded and exfiltrated. The
-broker sidecar moves those secrets out of Claude's container entirely.
+the AI runtime can theoretically be encoded and exfiltrated. The broker
+sidecar moves those secrets out of the AI container entirely.
 
 **How it works.** Drop credentials under `~/.clau/secrets/<project>/broker/`
 instead of `~/.clau/secrets/<project>/`. On `clau` start:
@@ -291,7 +374,7 @@ instead of `~/.clau/secrets/<project>/`. On `clau` start:
    (`clau-net-<project>`) and reads creds from `/run/broker-secrets/`.
 2. The AI container joins the same network and gets `BROKER_URL=http://broker:8080`
    plus a per-run `BROKER_AUTH_TOKEN`. It does **not** receive the provider API keys themselves.
-3. Claude's firewall removes Meta / Google Ads / Analytics / Search
+3. The AI container firewall removes Meta / Google Ads / Analytics / Search
    Console hosts; only the broker IP and the standard dev hosts are
    reachable. The broker has its own firewall (`~/.clau/allowlists/broker.txt`)
    that allows only the provider APIs.
@@ -317,9 +400,9 @@ instead of `~/.clau/secrets/<project>/`. On `clau` start:
 ```
 
 **Multi-project**: each project pairs 1:1 with its own broker
-(`broker-<project>`) on its own docker network. Project A's Claude
-container can't reach project B's broker — they're on different
-networks with different credentials.
+(`broker-<project>`) on its own docker network. Project A's AI container can't
+reach project B's broker — they're on different networks with different
+credentials.
 
 **Endpoints** — see `broker/README.md` for the full list. Common ones:
 
@@ -380,6 +463,7 @@ One domain per line. The container can only reach hosts on the allowlist for HTT
 | `claude-auth`, `claude-auth-<profile>` | Claude OAuth session | global per profile |
 | `codex-auth`, `codex-auth-<profile>` | Codex ChatGPT/API auth and Codex config | global per profile |
 | `clau-pip` | pip-installed Python packages | global, all projects |
+| `clau-npm` | npm cache | global, all projects |
 | `clau-tools` | dev tools (Headroom, Caveman, ...) | global, all projects |
 | `clau-history-<project>` | bash history | per-project |
 | `clau-net-<project>` | docker network shared by `clau-<project>` + `broker-<project>` | per-project (only when broker is enabled) |
