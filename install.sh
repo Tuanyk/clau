@@ -38,14 +38,15 @@ fi
 cat <<EOF
 
 ✓ Xong. Tiếp theo:
-   1. clau-login                  # Claude login (1 lần)
-   2. codex-login                 # Codex ChatGPT login (1 lần)
+   1. clau-login                  # Claude login (1 lần; mở URL bằng browser host nếu có)
+   2. codex-login                 # Codex ChatGPT login (1 lần; mở URL bằng browser host nếu có)
    3. cd ~/work/du-an && clau     # chạy shell (mặc định có firewall)
-   4. clau --claude               # mở Claude trực tiếp trong container
-   5. clau --codex                # mở Codex trực tiếp trong container
-   6. clau --claude --yolo        # Claude + --dangerously-skip-permissions
-   7. clau --codex --yolo         # Codex + bypass sandbox/approvals trong container
-   8. clau --no-firewall          # tắt firewall (debug)
+   4. clau --browser              # shell + mở browser trên host khi container cần
+   5. clau --claude               # mở Claude trực tiếp trong container
+   6. clau --codex                # mở Codex trực tiếp trong container
+   7. clau --claude --yolo        # Claude + --dangerously-skip-permissions
+   8. clau --codex --yolo         # Codex + bypass sandbox/approvals trong container
+   9. clau --no-firewall          # tắt firewall (debug)
 
 Allowlist mặc định: $SCRIPT_DIR/allowlist.txt
 Override theo dự án: $HOME/.clau/allowlists/<ten-du-an>.txt

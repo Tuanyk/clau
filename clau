@@ -18,6 +18,7 @@ ALLOWLISTS_DIR="${CLAU_ALLOWLISTS_DIR:-$HOME/.clau/allowlists}"
 [[ ! -d "$ALLOWLISTS_DIR" && -d "$CONFIG_DIR/allowlists" ]] && ALLOWLISTS_DIR="$CONFIG_DIR/allowlists"
 TEMPLATES_DIR="$CONFIG_DIR/templates"
 DEFAULT_ALLOWLIST="$CONFIG_DIR/allowlist.txt"
+[[ -f "$CONFIG_DIR/browser-bridge.sh" ]] && source "$CONFIG_DIR/browser-bridge.sh"
 
 usage() {
   cat <<'EOF'
@@ -27,6 +28,7 @@ Usage:
 Options:
   --claude         Start Claude directly instead of opening a shell.
   --codex          Start Codex directly instead of opening a shell.
+  --browser        Let container browser-open requests use the host browser.
   --yolo           Skip tool approvals/sandbox prompts for Claude or Codex.
   --no-firewall    Disable the main AI container URL allowlist for this run.
                    The broker sidecar still keeps its own firewall.
@@ -34,7 +36,9 @@ Options:
 
 Common examples:
   clau
+  clau --browser
   clau --claude
+  clau --claude --browser
   clau --codex
   clau --claude --yolo
   clau --codex --yolo
@@ -85,6 +89,7 @@ NO_FIREWALL=0
 DANGER=0
 RUN_CLAUDE=0
 RUN_CODEX=0
+HOST_BROWSER=0
 for arg in "$@"; do
   case "$arg" in
     -h|--help|help)
@@ -95,11 +100,16 @@ for arg in "$@"; do
     --yolo) DANGER=1 ;;  # shortcut: --dangerously-skip-permissions
     --claude) RUN_CLAUDE=1 ;;
     --codex) RUN_CODEX=1 ;;
+    --browser) HOST_BROWSER=1 ;;
   esac
 done
 
 if [[ "$RUN_CLAUDE" -eq 1 && "$RUN_CODEX" -eq 1 ]]; then
   echo "❌ Choose only one direct-run mode: --claude or --codex"
+  exit 1
+fi
+if [[ "$HOST_BROWSER" -eq 1 ]] && ! declare -F clau_browser_bridge_start >/dev/null 2>&1; then
+  echo "❌ Browser bridge helper not found: $CONFIG_DIR/browser-bridge.sh"
   exit 1
 fi
 
@@ -163,6 +173,9 @@ if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
   echo "📎 Attach to existing $CONTAINER_NAME"
   echo "   ⚠️  Env vars and mounts from this run are NOT applied on attach."
   echo "      To pick up secrets/ or .env changes: docker stop $CONTAINER_NAME && clau"
+  if [[ "$HOST_BROWSER" -eq 1 ]]; then
+    echo "      --browser also needs a fresh container: docker stop $CONTAINER_NAME && clau --browser"
+  fi
   exec docker exec -it \
     --user dev \
     -e HOME=/home/dev \
@@ -602,6 +615,12 @@ done
 #   kubeconfig    → KUBECONFIG=/run/clau-secrets/kubeconfig
 #   id_ed25519    → ID_ED25519=/run/clau-secrets/id_ed25519
 EXTRA_ENV=()
+if [[ "$HOST_BROWSER" -eq 1 ]]; then
+  clau_browser_bridge_start "$CONTAINER_NAME" || exit 1
+  trap clau_browser_bridge_stop EXIT
+  MOUNTS+=("${CLAU_BROWSER_BRIDGE_DOCKER_ARGS[@]}")
+  EXTRA_ENV+=("${CLAU_BROWSER_BRIDGE_ENV[@]}")
+fi
 if [[ -d "$PROJECT_FILE_SECRETS" ]]; then
   secret_tmpfs_added=0
   injected=()
@@ -749,22 +768,31 @@ else
 fi
 
 echo "🚀 $CONTAINER_NAME"
-exec docker run -it --rm \
-  --name "$CONTAINER_NAME" \
-  --hostname "$PROJECT_NAME" \
-  -e ANTHROPIC_API_KEY= \
-  -e OPENAI_API_KEY= \
-  -e CODEX_HOME=/home/dev/.codex \
-  -e PIP_USER=1 \
-  -e PIP_BREAK_SYSTEM_PACKAGES=1 \
-  -e PYTHONUSERBASE=/home/dev/.pip-user \
-  "${FIREWALL_OPTS[@]}" \
-  "${BWRAP_OPTS[@]}" \
-  "${NETWORK_OPTS[@]}" \
-  "${PORT_OPTS[@]}" \
-  "${EXTRA_ENV[@]}" \
-  "${ENV_FILES[@]}" \
-  "${MOUNTS[@]}" \
-  -w "$PROJECT_DIR" \
-  "$IMAGE" \
+DOCKER_RUN_CMD=(
+  docker run -it --rm
+  --name "$CONTAINER_NAME"
+  --hostname "$PROJECT_NAME"
+  -e ANTHROPIC_API_KEY=
+  -e OPENAI_API_KEY=
+  -e CODEX_HOME=/home/dev/.codex
+  -e PIP_USER=1
+  -e PIP_BREAK_SYSTEM_PACKAGES=1
+  -e PYTHONUSERBASE=/home/dev/.pip-user
+  "${FIREWALL_OPTS[@]}"
+  "${BWRAP_OPTS[@]}"
+  "${NETWORK_OPTS[@]}"
+  "${PORT_OPTS[@]}"
+  "${EXTRA_ENV[@]}"
+  "${ENV_FILES[@]}"
+  "${MOUNTS[@]}"
+  -w "$PROJECT_DIR"
+  "$IMAGE"
   bash -c "$ENTRY_CMD"
+)
+
+if [[ "$HOST_BROWSER" -eq 1 ]]; then
+  "${DOCKER_RUN_CMD[@]}"
+  exit $?
+fi
+
+exec "${DOCKER_RUN_CMD[@]}"

@@ -10,12 +10,17 @@ clau-login          # one-time Claude OAuth login (stored in `claude-auth`)
 codex-login         # one-time Codex ChatGPT login (stored in `codex-auth`)
 ```
 
+`clau-login` and `codex-login` enable the host browser bridge by default: if the
+CLI tries to open a login URL, your normal desktop browser opens it. Use
+`--no-browser` to disable that and copy URLs manually.
+
 ## Run
 
 ```bash
 cd ~/path/to/project
 clau                # shell in the container; run `claude` or `codex`
 clau --claude       # open Claude directly
+clau --browser      # shell; browser-open requests go to the host browser
 clau --codex        # open Codex directly
 clau --claude --yolo # open Claude with --dangerously-skip-permissions
 clau --codex --yolo  # open Codex with --dangerously-bypass-approvals-and-sandbox
@@ -31,6 +36,11 @@ turn those Docker options off for debugging:
 ```bash
 CLAU_BWRAP_OPTS=0 clau
 ```
+
+`clau --browser` does not install a GUI browser inside Docker. It sets
+`BROWSER` and an `xdg-open` shim in the container, then opens requested URLs on
+the host. If a project container is already running, stop it first; Docker
+cannot add the browser bridge mount to an existing container.
 
 By default, `clau` maps the first free host port starting at `13000` to port
 `3000` inside the container. Next.js can still listen on `3000`; open the host

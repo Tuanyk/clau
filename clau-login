@@ -4,18 +4,76 @@ SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_S
 CONFIG_DIR="$(dirname "$SCRIPT_PATH")"
 IMAGE="claude-base"
 VOLUME="claude-auth"
+CLAU_BROWSER_BRIDGE_DOCKER_ARGS=()
+CLAU_BROWSER_BRIDGE_ENV=()
+[[ -f "$CONFIG_DIR/browser-bridge.sh" ]] && source "$CONFIG_DIR/browser-bridge.sh"
 
-docker volume inspect "$VOLUME" &>/dev/null || docker volume create "$VOLUME"
+usage() {
+  cat <<'EOF'
+Usage:
+  clau-login [--browser|--no-browser]
 
-echo "🔐 Login 1 lần. Follow hướng dẫn trên terminal (có thể cần copy URL sang browser)."
+Options:
+  --browser      Open login URLs in the host browser when the CLI requests it (default).
+  --no-browser   Disable the host browser bridge; copy URLs manually.
+  -h, --help     Show this help and exit.
+EOF
+}
 
-NETWORK_OPTS="--network host"
-[[ "$(uname)" == "Darwin" ]] && NETWORK_OPTS=""  # Mac: OAuth thường dùng copy-paste URL
+HOST_BROWSER=1
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help|help)
+      usage
+      exit 0
+      ;;
+    --browser) HOST_BROWSER=1 ;;
+    --no-browser) HOST_BROWSER=0 ;;
+    *)
+      echo "❌ Unknown option: $arg"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if ! docker image inspect "$IMAGE" &>/dev/null; then
+  echo "❌ Image chưa có. Chạy: $CONFIG_DIR/install.sh"
+  exit 1
+fi
+
+if [[ "$HOST_BROWSER" -eq 1 ]] && ! declare -F clau_browser_bridge_start >/dev/null 2>&1; then
+  echo "❌ Browser bridge helper not found: $CONFIG_DIR/browser-bridge.sh"
+  exit 1
+fi
+
+docker volume inspect "$VOLUME" &>/dev/null || docker volume create "$VOLUME" >/dev/null
+
+echo "🔐 Claude login 1 lần. Browser bridge sẽ mở URL bằng browser trên host khi CLI yêu cầu."
+
+NETWORK_OPTS=(--network host)
+[[ "$(uname)" == "Darwin" ]] && NETWORK_OPTS=()  # Mac: OAuth thường dùng copy-paste URL
+
+if [[ "$HOST_BROWSER" -eq 1 ]]; then
+  clau_browser_bridge_start "Claude login" || exit 1
+  trap clau_browser_bridge_stop EXIT
+fi
 
 # Login không cần firewall
-exec docker run -it --rm \
-  --name clau-login \
-  $NETWORK_OPTS \
-  -v "$VOLUME:/home/dev/.claude" \
-  "$IMAGE" \
-  bash -c 'claude /login || claude'
+DOCKER_RUN_CMD=(
+  docker run -it --rm
+  --name clau-login
+  "${NETWORK_OPTS[@]}"
+  "${CLAU_BROWSER_BRIDGE_DOCKER_ARGS[@]}"
+  "${CLAU_BROWSER_BRIDGE_ENV[@]}"
+  -v "$VOLUME:/home/dev/.claude"
+  "$IMAGE"
+  bash -lc 'export PATH="/host-browser:$PATH"; claude /login || claude'
+)
+
+if [[ "$HOST_BROWSER" -eq 1 ]]; then
+  "${DOCKER_RUN_CMD[@]}"
+  exit $?
+fi
+
+exec "${DOCKER_RUN_CMD[@]}"
