@@ -2,7 +2,12 @@
 # These rules stay as defense-in-depth in case anything ends up in-tree.
 secrets/
 allowlists/
+.env
+*.env
 .codex
+.codex/
+.claude/
+.clau/
 __pycache__/
 *.pyc
 *.pyo
