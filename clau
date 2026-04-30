@@ -25,6 +25,7 @@ Usage:
   clau [options]
 
 Options:
+  --claude         Start Claude directly instead of opening a shell.
   --codex          Start Codex directly instead of opening a shell.
   --yolo           Skip tool approvals/sandbox prompts for Claude or Codex.
   --no-firewall    Disable the main AI container URL allowlist for this run.
@@ -33,7 +34,9 @@ Options:
 
 Common examples:
   clau
+  clau --claude
   clau --codex
+  clau --claude --yolo
   clau --codex --yolo
   clau --no-firewall
   CLAU_WITH_CODEX_AUTH=1 clau
@@ -80,6 +83,7 @@ EOF
 # ─── Parse flags ────────────────────────────────────────────
 NO_FIREWALL=0
 DANGER=0
+RUN_CLAUDE=0
 RUN_CODEX=0
 for arg in "$@"; do
   case "$arg" in
@@ -89,9 +93,15 @@ for arg in "$@"; do
       ;;
     --no-firewall) NO_FIREWALL=1 ;;
     --yolo) DANGER=1 ;;  # shortcut: --dangerously-skip-permissions
+    --claude) RUN_CLAUDE=1 ;;
     --codex) RUN_CODEX=1 ;;
   esac
 done
+
+if [[ "$RUN_CLAUDE" -eq 1 && "$RUN_CODEX" -eq 1 ]]; then
+  echo "❌ Choose only one direct-run mode: --claude or --codex"
+  exit 1
+fi
 
 # ─── Xác định dự án ─────────────────────────────────────────
 # Mặc định PROJECT_NAME lấy từ basename. Hai dự án cùng basename
@@ -726,6 +736,11 @@ if [[ "$RUN_CODEX" -eq 1 && "$DANGER" -eq 1 ]]; then
   ENTRY_CMD+='exec bash -c "codex --dangerously-bypass-approvals-and-sandbox; exec bash"'
 elif [[ "$RUN_CODEX" -eq 1 ]]; then
   ENTRY_CMD+='exec bash -c "codex; exec bash"'
+elif [[ "$RUN_CLAUDE" -eq 1 && "$DANGER" -eq 1 ]]; then
+  ENTRY_CMD+='echo "  ⚡ --yolo mode: sẽ chạy claude --dangerously-skip-permissions";'
+  ENTRY_CMD+='exec bash -c "claude --dangerously-skip-permissions; exec bash"'
+elif [[ "$RUN_CLAUDE" -eq 1 ]]; then
+  ENTRY_CMD+='exec bash -c "claude; exec bash"'
 elif [[ "$DANGER" -eq 1 ]]; then
   ENTRY_CMD+='echo "  ⚡ --yolo mode: sẽ chạy claude --dangerously-skip-permissions";'
   ENTRY_CMD+='exec bash -c "claude --dangerously-skip-permissions; exec bash"'

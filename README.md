@@ -15,9 +15,10 @@ codex-login         # one-time Codex ChatGPT login (stored in `codex-auth`)
 ```bash
 cd ~/path/to/project
 clau                # shell in the container; run `claude` or `codex`
+clau --claude       # open Claude directly
 clau --codex        # open Codex directly
-clau --yolo         # open Claude with --dangerously-skip-permissions
-clau --codex --yolo # open Codex with --dangerously-bypass-approvals-and-sandbox
+clau --claude --yolo # open Claude with --dangerously-skip-permissions
+clau --codex --yolo  # open Codex with --dangerously-bypass-approvals-and-sandbox
 clau --no-firewall  # debug mode
 clau --help         # show options, env vars, secret paths, and allowlists
 ```
@@ -66,10 +67,11 @@ codex-auth  -> /home/dev/.codex
 
 This keeps OAuth/session credentials inside Docker volumes instead of using your host API keys. The launcher intentionally blanks `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` for the container, even if they exist on the host or in an env file, so Claude/Codex do not inherit long-lived API keys.
 
-By default, a normal shell/Claude run mounts only `claude-auth`; `clau --codex`
-mounts only `codex-auth`. Set `CLAU_WITH_CODEX_AUTH=1` if you explicitly need
-Codex auth in a normal shell, or `CLAU_WITHOUT_AUTH=1` for a shell with neither
-auth volume mounted.
+By default, a normal shell/Claude run mounts only `claude-auth`; `clau --claude`
+also mounts only `claude-auth`, while `clau --codex` mounts only `codex-auth`.
+Set `CLAU_WITH_CODEX_AUTH=1` if you explicitly need Codex auth in a normal shell
+or Claude run, or `CLAU_WITHOUT_AUTH=1` for a shell with neither auth volume
+mounted.
 
 Codex models can differ by auth mode and rollout. `gpt-5.5` is available in
 Codex only when it appears for the signed-in ChatGPT account; API-key auth

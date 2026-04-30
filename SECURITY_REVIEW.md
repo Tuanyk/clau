@@ -120,9 +120,9 @@ drop to the `broker` user before starting `uvicorn`.
 
 The launcher no longer mounts both Claude and Codex auth volumes by default.
 
-- normal shell / Claude mode: mounts `claude-auth`
+- normal shell / `clau --claude`: mounts `claude-auth`
 - `clau --codex`: mounts `codex-auth`
-- `CLAU_WITH_CODEX_AUTH=1`: explicitly mount Codex auth in normal shell mode
+- `CLAU_WITH_CODEX_AUTH=1`: explicitly mount Codex auth in normal shell / Claude mode
 - `CLAU_WITHOUT_AUTH=1`: mount neither auth volume
 
 This does not hide a CLI's own auth credentials from that CLI process, but it
