@@ -11,6 +11,16 @@ chatgpt.com
 platform.openai.com
 developers.openai.com
 
+# Google / Gemini CLI
+# generativelanguage.googleapis.com → Gemini API (AI Studio key path)
+# aiplatform.googleapis.com         → Vertex AI fallback
+# cloudcode-pa.googleapis.com       → Gemini Code Assist (OAuth path)
+# cloudaicompanion.googleapis.com   → Gemini for Google Cloud
+generativelanguage.googleapis.com
+aiplatform.googleapis.com
+cloudcode-pa.googleapis.com
+cloudaicompanion.googleapis.com
+
 # Git hosting
 github.com
 api.github.com

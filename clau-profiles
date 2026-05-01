@@ -5,23 +5,25 @@ SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_S
 CONFIG_DIR="$(dirname "$SCRIPT_PATH")"
 CLAUDE_AUTH_VOLUME_BASE="claude-auth"
 CODEX_AUTH_VOLUME_BASE="codex-auth"
+GEMINI_AUTH_VOLUME_BASE="gemini-auth"
 [[ -f "$CONFIG_DIR/auth-profile.sh" ]] && source "$CONFIG_DIR/auth-profile.sh"
 
 usage() {
   cat <<'EOF'
 Usage:
   clau-profiles [list]
-  clau-profiles delete PROFILE [--claude|--codex|--all] [-y|--yes]
+  clau-profiles delete PROFILE [--claude|--codex|--gemini|--all] [-y|--yes]
 
 Commands:
-  list                  List existing Claude/Codex auth profiles (default).
+  list                  List existing Claude/Codex/Gemini auth profiles (default).
   delete PROFILE        Delete auth volume(s) for a profile.
   rm PROFILE            Alias for delete.
 
 Delete options:
   --claude              Delete only the Claude auth volume.
   --codex               Delete only the Codex auth volume.
-  --all                 Delete both auth volumes for the profile (default).
+  --gemini              Delete only the Gemini auth volume.
+  --all                 Delete all auth volumes for the profile (default).
   -y, --yes             Do not prompt for confirmation.
   -h, --help            Show this help and exit.
 
@@ -29,6 +31,7 @@ Examples:
   clau-profiles
   clau-profiles delete work
   clau-profiles delete work --codex
+  clau-profiles delete work --gemini
   clau-profiles delete default --all --yes
 EOF
 }
@@ -60,7 +63,9 @@ list_profiles() {
 
   rows="$(
     printf '%s\n' "$volumes" \
-      | awk -v claude_base="$CLAUDE_AUTH_VOLUME_BASE" -v codex_base="$CODEX_AUTH_VOLUME_BASE" '
+      | awk -v claude_base="$CLAUDE_AUTH_VOLUME_BASE" \
+            -v codex_base="$CODEX_AUTH_VOLUME_BASE" \
+            -v gemini_base="$GEMINI_AUTH_VOLUME_BASE" '
           $0 == claude_base {
             print "default\tclaude\t" $0
             next
@@ -79,6 +84,15 @@ list_profiles() {
             if (profile != "") print profile "\tcodex\t" $0
             next
           }
+          $0 == gemini_base {
+            print "default\tgemini\t" $0
+            next
+          }
+          index($0, gemini_base "-") == 1 {
+            profile = substr($0, length(gemini_base) + 2)
+            if (profile != "") print profile "\tgemini\t" $0
+            next
+          }
         ' \
       | awk '
           BEGIN { FS = "\t"; OFS = "\t" }
@@ -86,26 +100,30 @@ list_profiles() {
             profiles[$1] = 1
             if ($2 == "claude") claude[$1] = $3
             if ($2 == "codex") codex[$1] = $3
+            if ($2 == "gemini") gemini[$1] = $3
           }
           END {
             for (profile in profiles) {
               key = (profile == "default") ? "0" : "1" profile
-              print key, profile, ((profile in claude) ? claude[profile] : "-"), ((profile in codex) ? codex[profile] : "-")
+              print key, profile,
+                ((profile in claude) ? claude[profile] : "-"),
+                ((profile in codex) ? codex[profile] : "-"),
+                ((profile in gemini) ? gemini[profile] : "-")
             }
           }
         '
   )"
 
   if [[ -z "$rows" ]]; then
-    echo "No Claude/Codex auth profiles found."
+    echo "No Claude/Codex/Gemini auth profiles found."
     return 0
   fi
 
-  printf '%-24s %-32s %-32s\n' "PROFILE" "CLAUDE" "CODEX"
+  printf '%-20s %-28s %-28s %-28s\n' "PROFILE" "CLAUDE" "CODEX" "GEMINI"
   printf '%s\n' "$rows" \
     | sort -t $'\t' -k1,1 \
-    | while IFS=$'\t' read -r _ profile claude_volume codex_volume; do
-        printf '%-24s %-32s %-32s\n' "$profile" "$claude_volume" "$codex_volume"
+    | while IFS=$'\t' read -r _ profile claude_volume codex_volume gemini_volume; do
+        printf '%-20s %-28s %-28s %-28s\n' "$profile" "$claude_volume" "$codex_volume" "$gemini_volume"
       done
 }
 
@@ -131,6 +149,7 @@ delete_profile() {
   local profile raw_lower
   local delete_claude=0
   local delete_codex=0
+  local delete_gemini=0
   local saw_scope=0
   local assume_yes=0
   local volume
@@ -154,9 +173,14 @@ delete_profile() {
         delete_codex=1
         saw_scope=1
         ;;
+      --gemini)
+        delete_gemini=1
+        saw_scope=1
+        ;;
       --all)
         delete_claude=1
         delete_codex=1
+        delete_gemini=1
         saw_scope=1
         ;;
       -y|--yes)
@@ -178,6 +202,7 @@ delete_profile() {
   if [[ "$saw_scope" -eq 0 ]]; then
     delete_claude=1
     delete_codex=1
+    delete_gemini=1
   fi
 
   profile="$(clau_auth_profile_normalize "$raw_profile")"
@@ -192,6 +217,9 @@ delete_profile() {
   fi
   if [[ "$delete_codex" -eq 1 ]]; then
     targets+=("$(clau_auth_volume_name "$CODEX_AUTH_VOLUME_BASE" "$profile")")
+  fi
+  if [[ "$delete_gemini" -eq 1 ]]; then
+    targets+=("$(clau_auth_volume_name "$GEMINI_AUTH_VOLUME_BASE" "$profile")")
   fi
 
   for volume in "${targets[@]}"; do

@@ -10,9 +10,9 @@ usage() {
 Usage:
   clau-update
 
-Rebuild only the cached main image tail that installs Claude Code and Codex CLI.
-This leaves auth volumes, project data, pip/npm/tool volumes, and broker image
-untouched.
+Rebuild only the cached main image tail that installs Claude Code, Codex CLI,
+and Gemini CLI. This leaves auth volumes, project data, pip/npm/tool volumes,
+and broker image untouched.
 EOF
 }
 
@@ -30,7 +30,7 @@ for arg in "$@"; do
   esac
 done
 
-echo "📦 Updating Claude Code and Codex CLI in image: $IMAGE"
+echo "📦 Updating Claude Code, Codex CLI, and Gemini CLI in image: $IMAGE"
 echo "   Cache bust: $REFRESH"
 
 DOCKER_BUILDKIT=1 docker build \
@@ -40,4 +40,4 @@ DOCKER_BUILDKIT=1 docker build \
   -t "$IMAGE" \
   "$SCRIPT_DIR"
 
-echo "✓ Updated $IMAGE. Restart running clau containers to use the new CLIs."
+echo "✓ Updated $IMAGE (Claude Code, Codex, Gemini). Restart running clau containers to use the new CLIs."

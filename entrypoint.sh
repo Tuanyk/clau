@@ -3,14 +3,14 @@ set -e
 
 if [ "$(id -u)" = "0" ]; then
   # Symlink ~/.claude.json so Claude state persists with the mounted .claude volume.
-  mkdir -p /home/dev/.claude /home/dev/.codex /home/dev/.history-store /home/dev/.npm /home/dev/.pip-user /var/log/clau
+  mkdir -p /home/dev/.claude /home/dev/.codex /home/dev/.gemini /home/dev/.history-store /home/dev/.npm /home/dev/.pip-user /var/log/clau
   if [ ! -L /home/dev/.claude.json ]; then
     rm -f /home/dev/.claude.json
     ln -s /home/dev/.claude/claude.json /home/dev/.claude.json
   fi
-  chown -R dev:dev /home/dev/.claude /home/dev/.codex /home/dev/.history-store /home/dev/.npm /home/dev/.pip-user /var/log/clau 2>/dev/null || true
+  chown -R dev:dev /home/dev/.claude /home/dev/.codex /home/dev/.gemini /home/dev/.history-store /home/dev/.npm /home/dev/.pip-user /var/log/clau 2>/dev/null || true
 else
-  mkdir -p /home/dev/.claude /home/dev/.codex
+  mkdir -p /home/dev/.claude /home/dev/.codex /home/dev/.gemini
 fi
 
 # Setup firewall nếu có allowlist được mount. BROKER_IP/PORT pass dạng positional

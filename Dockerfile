@@ -53,7 +53,7 @@ RUN groupadd --gid $USER_GID dev 2>/dev/null || true \
 
 USER dev
 WORKDIR /home/dev
-RUN mkdir -p /home/dev/.pip-user/bin /home/dev/.codex /home/dev/.history-store /home/dev/.npm
+RUN mkdir -p /home/dev/.pip-user/bin /home/dev/.codex /home/dev/.gemini /home/dev/.history-store /home/dev/.npm
 ENV PATH="/opt/clau-tools/bin:/home/dev/.pip-user/bin:/home/dev/.local/bin:${PATH}"
 
 # ─── Pip toolbelt (baked into image) ────────────────────────
@@ -181,6 +181,10 @@ RUN echo "clau CLI refresh: ${CLAU_CLI_REFRESH}" \
 USER root
 RUN echo "clau CLI refresh: ${CLAU_CLI_REFRESH}" \
     && npm install -g @openai/codex@latest
+
+USER root
+RUN echo "clau CLI refresh: ${CLAU_CLI_REFRESH}" \
+    && npm install -g @google/gemini-cli@latest
 
 USER root
 WORKDIR /workspace

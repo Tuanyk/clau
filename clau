@@ -7,6 +7,7 @@ CONFIG_DIR="$(dirname "$SCRIPT_PATH")"
 IMAGE="claude-base"
 CLAUDE_AUTH_VOLUME_BASE="claude-auth"
 CODEX_AUTH_VOLUME_BASE="codex-auth"
+GEMINI_AUTH_VOLUME_BASE="gemini-auth"
 PIP_VOLUME="clau-pip"
 NPM_VOLUME="clau-npm"
 TOOLS_VOLUME="clau-tools"
@@ -26,14 +27,15 @@ usage() {
 Usage:
   clau [options]
   clau profiles [list]
-  clau profiles delete PROFILE [--claude|--codex|--all] [-y|--yes]
+  clau profiles delete PROFILE [--claude|--codex|--gemini|--all] [-y|--yes]
 
 Options:
   --claude         Start Claude directly instead of opening a shell.
   --codex          Start Codex directly instead of opening a shell.
+  --gemini         Start Gemini CLI directly instead of opening a shell.
   --browser        Let container browser-open requests use the host browser.
-  --profile NAME   Use named Claude/Codex auth volumes. Default: default.
-  --yolo           Skip tool approvals/sandbox prompts for Claude or Codex.
+  --profile NAME   Use named Claude/Codex/Gemini auth volumes. Default: default.
+  --yolo           Skip tool approvals/sandbox prompts for Claude/Codex/Gemini.
   --no-firewall    Disable the main AI container URL allowlist for this run.
                    The broker sidecar still keeps its own firewall.
   -h, --help       Show this help and exit.
@@ -45,12 +47,16 @@ Common examples:
   clau --claude --profile work
   clau --claude --browser
   clau --codex
+  clau --gemini
   clau --claude --yolo
   clau --codex --yolo
+  clau --gemini --yolo
   clau profiles
   clau profiles delete work --codex
+  clau profiles delete work --gemini
   clau --no-firewall
   CLAU_WITH_CODEX_AUTH=1 clau
+  CLAU_WITH_GEMINI_AUTH=1 clau
   CLAU_PORTS=auto:3000,auto:5173 clau
   CLAU_PROJECT_NAME=my-app-personal clau
 
@@ -60,7 +66,8 @@ Important env vars:
   CLAU_PORTS                 Port forwards. Examples: auto:3000, 3001:3000, or empty to disable.
   CLAU_LOAD_PROJECT_ENV=1    Legacy: load <project>/.env into the AI container.
   CLAU_WITH_CODEX_AUTH=1     Mount Codex auth volume in normal shell/Claude mode.
-  CLAU_WITHOUT_AUTH=1        Mount neither Claude nor Codex auth volumes.
+  CLAU_WITH_GEMINI_AUTH=1    Mount Gemini auth volume in normal shell/Claude mode.
+  CLAU_WITHOUT_AUTH=1        Mount no AI auth volumes (Claude/Codex/Gemini).
   CLAU_SKIP_SNAPSHOT=1       Skip the pre-run project snapshot.
   CLAU_SKIP_AUTO_DOCS=1      Do not seed CLAUDE.md / AGENTS.md into the project.
   CLAU_BROKER_DASHBOARD=1    Publish broker dashboard on 127.0.0.1.
@@ -70,29 +77,36 @@ Auth profiles:
   Existing logins use the default profile:
     claude-auth -> /home/dev/.claude
     codex-auth  -> /home/dev/.codex
+    gemini-auth -> /home/dev/.gemini
 
   Use old/default login:
     clau --claude
     clau --codex
+    clau --gemini
     clau --profile default --claude
 
   Re-login old/default account:
     clau-login
     codex-login
+    gemini-login
     clau-login --profile default
     codex-login --profile default
+    gemini-login --profile default
 
   Add and use another account:
     clau-login --profile work
     codex-login --profile work
+    gemini-login --profile work
     clau --profile work --claude
     clau --profile work --codex
+    clau --profile work --gemini
 
   List/delete auth profiles:
     clau profiles
     clau profiles delete work
     clau profiles delete work --claude
     clau profiles delete work --codex
+    clau profiles delete work --gemini
 
 Secret locations:
   ~/.clau/secrets/<project>/broker/
@@ -135,6 +149,7 @@ NO_FIREWALL=0
 DANGER=0
 RUN_CLAUDE=0
 RUN_CODEX=0
+RUN_GEMINI=0
 HOST_BROWSER=0
 AUTH_PROFILE_RAW="${CLAU_PROFILE:-default}"
 while (($#)); do
@@ -147,6 +162,7 @@ while (($#)); do
     --yolo) DANGER=1 ;;  # shortcut: --dangerously-skip-permissions
     --claude) RUN_CLAUDE=1 ;;
     --codex) RUN_CODEX=1 ;;
+    --gemini) RUN_GEMINI=1 ;;
     --browser) HOST_BROWSER=1 ;;
     --profile)
       shift
@@ -165,8 +181,8 @@ while (($#)); do
   shift
 done
 
-if [[ "$RUN_CLAUDE" -eq 1 && "$RUN_CODEX" -eq 1 ]]; then
-  echo "❌ Choose only one direct-run mode: --claude or --codex"
+if (( RUN_CLAUDE + RUN_CODEX + RUN_GEMINI > 1 )); then
+  echo "❌ Choose only one direct-run mode: --claude, --codex, or --gemini"
   exit 1
 fi
 if [[ "$HOST_BROWSER" -eq 1 ]] && ! declare -F clau_browser_bridge_start >/dev/null 2>&1; then
@@ -176,6 +192,7 @@ fi
 AUTH_PROFILE="$(clau_auth_profile_normalize "$AUTH_PROFILE_RAW")"
 CLAUDE_AUTH_VOLUME="$(clau_auth_volume_name "$CLAUDE_AUTH_VOLUME_BASE" "$AUTH_PROFILE")"
 CODEX_AUTH_VOLUME="$(clau_auth_volume_name "$CODEX_AUTH_VOLUME_BASE" "$AUTH_PROFILE")"
+GEMINI_AUTH_VOLUME="$(clau_auth_volume_name "$GEMINI_AUTH_VOLUME_BASE" "$AUTH_PROFILE")"
 
 # ─── Xác định dự án ─────────────────────────────────────────
 # Mặc định PROJECT_NAME lấy từ basename. Hai dự án cùng basename
@@ -363,10 +380,12 @@ if ! docker image inspect "$IMAGE" &>/dev/null; then
   echo "❌ Image chưa có. Chạy: $CONFIG_DIR/install.sh"; exit 1
 fi
 
-# Auth volumes are created on demand. Use clau-login / codex-login with the same
-# profile once to populate them, then credentials persist across container runs.
+# Auth volumes are created on demand. Use clau-login / codex-login / gemini-login
+# with the same profile once to populate them, then credentials persist across
+# container runs.
 docker volume inspect "$CLAUDE_AUTH_VOLUME" &>/dev/null || docker volume create "$CLAUDE_AUTH_VOLUME" >/dev/null
 docker volume inspect "$CODEX_AUTH_VOLUME" &>/dev/null || docker volume create "$CODEX_AUTH_VOLUME" >/dev/null
+docker volume inspect "$GEMINI_AUTH_VOLUME" &>/dev/null || docker volume create "$GEMINI_AUTH_VOLUME" >/dev/null
 
 # ─── Tạo history volume (per-project) ───────────────────────
 docker volume inspect "$HISTORY_VOLUME" &>/dev/null || docker volume create "$HISTORY_VOLUME" >/dev/null
@@ -602,12 +621,19 @@ if [[ "${CLAU_WITHOUT_AUTH:-0}" == "1" ]]; then
 elif [[ "$RUN_CODEX" -eq 1 ]]; then
   MOUNTS+=(-v "$CODEX_AUTH_VOLUME:/home/dev/.codex")
   echo "🔐 Auth volume: Codex only"
+elif [[ "$RUN_GEMINI" -eq 1 ]]; then
+  MOUNTS+=(-v "$GEMINI_AUTH_VOLUME:/home/dev/.gemini")
+  echo "🔐 Auth volume: Gemini only"
 else
   MOUNTS+=(-v "$CLAUDE_AUTH_VOLUME:/home/dev/.claude")
   echo "🔐 Auth volume: Claude only"
   if [[ "${CLAU_WITH_CODEX_AUTH:-0}" == "1" ]]; then
     MOUNTS+=(-v "$CODEX_AUTH_VOLUME:/home/dev/.codex")
     echo "🔐 Auth volume: Codex also mounted because CLAU_WITH_CODEX_AUTH=1"
+  fi
+  if [[ "${CLAU_WITH_GEMINI_AUTH:-0}" == "1" ]]; then
+    MOUNTS+=(-v "$GEMINI_AUTH_VOLUME:/home/dev/.gemini")
+    echo "🔐 Auth volume: Gemini also mounted because CLAU_WITH_GEMINI_AUTH=1"
   fi
 fi
 
@@ -786,6 +812,8 @@ fi
 
 unset ANTHROPIC_API_KEY
 unset OPENAI_API_KEY
+unset GEMINI_API_KEY
+unset GOOGLE_API_KEY
 
 # ─── Entry command: persist bash_history qua volume ─────────
 # Map .bash_history vào /home/dev/.history-store/bash_history
@@ -813,13 +841,18 @@ if [ -n "$BROKER_URL" ]; then
   echo "  Endpoints: GET /health, /docs   POST /meta/insights, /ga4/run-report, /gsc/search-analytics, /google-ads/query"
 fi
 echo ""
-echo "Type: claude, codex, or env | sort for full list"
+echo "Type: claude, codex, gemini, or env | sort for full list"
 '
 if [[ "$RUN_CODEX" -eq 1 && "$DANGER" -eq 1 ]]; then
   ENTRY_CMD+='echo "  ⚡ --yolo mode: sẽ chạy codex --dangerously-bypass-approvals-and-sandbox";'
   ENTRY_CMD+='exec bash -c "codex --dangerously-bypass-approvals-and-sandbox; exec bash"'
 elif [[ "$RUN_CODEX" -eq 1 ]]; then
   ENTRY_CMD+='exec bash -c "codex; exec bash"'
+elif [[ "$RUN_GEMINI" -eq 1 && "$DANGER" -eq 1 ]]; then
+  ENTRY_CMD+='echo "  ⚡ --yolo mode: sẽ chạy gemini --yolo";'
+  ENTRY_CMD+='exec bash -c "gemini --yolo; exec bash"'
+elif [[ "$RUN_GEMINI" -eq 1 ]]; then
+  ENTRY_CMD+='exec bash -c "gemini; exec bash"'
 elif [[ "$RUN_CLAUDE" -eq 1 && "$DANGER" -eq 1 ]]; then
   ENTRY_CMD+='echo "  ⚡ --yolo mode: sẽ chạy claude --dangerously-skip-permissions";'
   ENTRY_CMD+='exec bash -c "claude --dangerously-skip-permissions; exec bash"'
@@ -839,6 +872,8 @@ DOCKER_RUN_CMD=(
   --hostname "$PROJECT_NAME"
   -e ANTHROPIC_API_KEY=
   -e OPENAI_API_KEY=
+  -e GEMINI_API_KEY=
+  -e GOOGLE_API_KEY=
   -e CODEX_HOME=/home/dev/.codex
   -e PIP_USER=1
   -e PIP_BREAK_SYSTEM_PACKAGES=1

@@ -1,15 +1,15 @@
 # clau
 
-`clau` runs Claude Code and OpenAI Codex inside a Docker container with a
-project-aware launcher around them: firewall allowlists, isolated auth
-profiles, persistent shell history, reusable tool/package volumes, host-browser
-login support, pre-run snapshots, and an optional sidecar broker for sensitive
-third-party credentials.
+`clau` runs Claude Code, OpenAI Codex, and Google Gemini CLI inside a Docker
+container with a project-aware launcher around them: firewall allowlists,
+isolated auth profiles, persistent shell history, reusable tool/package volumes,
+host-browser login support, pre-run snapshots, and an optional sidecar broker
+for sensitive third-party credentials.
 
-It is for people who want the convenience of `claude` and `codex`, but do not
-want every agent session to run directly in their normal host shell with broad
-access to local environment variables, network egress, auth files, and installed
-tools.
+It is for people who want the convenience of `claude`, `codex`, and `gemini`,
+but do not want every agent session to run directly in their normal host shell
+with broad access to local environment variables, network egress, auth files,
+and installed tools.
 
 ## Why this exists
 
@@ -29,14 +29,14 @@ environment as the developer:
 not make AI coding risk-free, but it gives each project a more controlled
 runtime and makes the safe path easier to use every day.
 
-## Why use clau instead of bare Claude/Codex?
+## Why use clau instead of bare Claude/Codex/Gemini?
 
-| Area | Bare `claude` / `codex` | `clau` |
+| Area | Bare `claude` / `codex` / `gemini` | `clau` |
 |---|---|---|
 | Runtime | Runs directly on the host | Runs in a Docker container |
 | Network | Host-level outbound access | HTTPS allowlist per project, plus broker-specific allowlist |
 | Auth | CLI auth lives in the normal user profile | Docker volumes per tool and per profile |
-| Account switching | Manual re-login or custom setup | `--profile`, `clau-login --profile`, `codex-login --profile` |
+| Account switching | Manual re-login or custom setup | `--profile`, `clau-login --profile`, `codex-login --profile`, `gemini-login --profile` |
 | Secrets | Easy to expose through env/files if mounted | Secret paths, guard hooks, managed Claude settings, optional broker |
 | Provider API keys | Usually inside the agent runtime | Optional broker sidecar keeps provider keys outside the AI container |
 | Recovery | Depends on git or manual backups | Host-side snapshot before fresh container start |
@@ -47,8 +47,8 @@ runtime and makes the safe path easier to use every day.
 ## Main features
 
 - One command for a containerized coding shell: `clau`.
-- Direct launch modes: `clau --claude` and `clau --codex`.
-- Named auth profiles for Claude and Codex.
+- Direct launch modes: `clau --claude`, `clau --codex`, and `clau --gemini`.
+- Named auth profiles for Claude, Codex, and Gemini.
 - Profile listing and deletion: `clau profiles`.
 - Per-project firewall allowlist.
 - Pre-run snapshots with `clau-restore`.
@@ -61,19 +61,21 @@ runtime and makes the safe path easier to use every day.
 
 ```bash
 ./install.sh        # build images and symlink commands into ~/.local/bin
-clau-update         # refresh Claude Code + Codex CLI using cached Docker layers
+clau-update         # refresh Claude Code + Codex + Gemini CLI using cached Docker layers
 clau-login          # one-time Claude OAuth login (stored in `claude-auth`)
 codex-login         # one-time Codex ChatGPT login (stored in `codex-auth`)
-clau profiles       # list Claude/Codex auth profiles
+gemini-login        # one-time Gemini login (stored in `gemini-auth`)
+clau profiles       # list Claude/Codex/Gemini auth profiles
 ```
 
-`clau-login` and `codex-login` enable the host browser bridge by default: if the
-CLI tries to open a login URL, your normal desktop browser opens it. Use
-`--no-browser` to disable that and copy URLs manually.
+`clau-login`, `codex-login`, and `gemini-login` enable the host browser bridge
+by default: if the CLI tries to open a login URL, your normal desktop browser
+opens it. Use `--no-browser` to disable that and copy URLs manually.
 
-`clau-update` rebuilds only the final Dockerfile tail that installs Claude Code
-and Codex CLI. It does not rebuild the broker image and does not touch auth,
-history, pip, npm, or tool volumes. Restart running `clau` containers afterward.
+`clau-update` rebuilds only the final Dockerfile tail that installs Claude Code,
+Codex, and Gemini CLI. It does not rebuild the broker image and does not touch
+auth, history, pip, npm, or tool volumes. Restart running `clau` containers
+afterward.
 
 ## Quick start
 
@@ -92,35 +94,42 @@ Common commands:
 clau                         # shell in the container
 clau --claude                # open Claude directly
 clau --codex                 # open Codex directly
+clau --gemini                # open Gemini CLI directly
 clau --browser               # shell with host-browser bridge
 clau --profile work --claude # use a named auth profile
 clau --profile work --codex
+clau --profile work --gemini
 clau --claude --yolo         # Claude + --dangerously-skip-permissions
 clau --codex --yolo          # Codex + bypass sandbox/approvals
+clau --gemini --yolo         # Gemini + --yolo (auto-accept tool calls)
 clau --no-firewall           # debug without the main AI container allowlist
 clau --help                  # show all options and important env vars
 ```
 
 ## Auth profiles
 
-Claude and Codex credentials are intentionally separate:
+Claude, Codex, and Gemini credentials are intentionally separate:
 
 ```text
 claude-auth            -> /home/dev/.claude
 codex-auth             -> /home/dev/.codex
+gemini-auth            -> /home/dev/.gemini
 claude-auth-<profile>  -> /home/dev/.claude
 codex-auth-<profile>   -> /home/dev/.codex
+gemini-auth-<profile>  -> /home/dev/.gemini
 ```
 
-The default profile keeps using the original `claude-auth` and `codex-auth`
-volumes, so existing logins continue to work. Use named profiles to rotate
-between accounts or clients:
+The default profile keeps using the original `claude-auth`, `codex-auth`, and
+`gemini-auth` volumes, so existing logins continue to work. Use named profiles
+to rotate between accounts or clients:
 
 ```bash
 clau-login --profile work
 codex-login --profile work
+gemini-login --profile work
 clau --profile work --claude
 clau --profile work --codex
+clau --profile work --gemini
 CLAU_PROFILE=work clau --codex
 ```
 
@@ -128,21 +137,24 @@ List or delete auth profiles:
 
 ```bash
 clau profiles
-clau profiles delete work        # delete Claude + Codex auth volumes for work
+clau profiles delete work        # delete Claude + Codex + Gemini auth volumes for work
 clau profiles delete work --claude
 clau profiles delete work --codex
+clau profiles delete work --gemini
 clau profiles delete default --all --yes
 ```
 
 By default, a normal shell or Claude run mounts only the selected Claude auth
-volume. `clau --codex` mounts only the selected Codex auth volume. Set
-`CLAU_WITH_CODEX_AUTH=1` if you explicitly need Codex auth in a normal shell or
-Claude run, or `CLAU_WITHOUT_AUTH=1` for a shell with neither auth volume.
+volume. `clau --codex` mounts only the selected Codex auth volume; `clau
+--gemini` mounts only the selected Gemini auth volume. Set
+`CLAU_WITH_CODEX_AUTH=1` or `CLAU_WITH_GEMINI_AUTH=1` if you need that auth
+volume alongside Claude in a normal shell, or `CLAU_WITHOUT_AUTH=1` for a shell
+with no AI auth volumes mounted.
 
-The launcher intentionally blanks `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` for
-the AI container, even if they exist on the host or in an env file. This keeps
-the CLIs on their OAuth/session auth path instead of accidentally inheriting
-long-lived host API keys.
+The launcher intentionally blanks `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+`GEMINI_API_KEY`, and `GOOGLE_API_KEY` for the AI container, even if they exist
+on the host or in an env file. This keeps the CLIs on their OAuth/session auth
+path instead of accidentally inheriting long-lived host API keys.
 
 ## Ports and browser bridge
 
@@ -462,6 +474,7 @@ One domain per line. The container can only reach hosts on the allowlist for HTT
 |---|---|---|
 | `claude-auth`, `claude-auth-<profile>` | Claude OAuth session | global per profile |
 | `codex-auth`, `codex-auth-<profile>` | Codex ChatGPT/API auth and Codex config | global per profile |
+| `gemini-auth`, `gemini-auth-<profile>` | Gemini OAuth/API auth and config | global per profile |
 | `clau-pip` | pip-installed Python packages | global, all projects |
 | `clau-npm` | npm cache | global, all projects |
 | `clau-tools` | dev tools (Headroom, Caveman, ...) | global, all projects |

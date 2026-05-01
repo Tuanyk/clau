@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}")"
+CONFIG_DIR="$(dirname "$SCRIPT_PATH")"
+IMAGE="claude-base"
+VOLUME_BASE="gemini-auth"
+CLAU_BROWSER_BRIDGE_DOCKER_ARGS=()
+CLAU_BROWSER_BRIDGE_ENV=()
+[[ -f "$CONFIG_DIR/browser-bridge.sh" ]] && source "$CONFIG_DIR/browser-bridge.sh"
+[[ -f "$CONFIG_DIR/auth-profile.sh" ]] && source "$CONFIG_DIR/auth-profile.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  gemini-login [--profile NAME] [--browser|--no-browser]
+
+Options:
+  --profile NAME  Save credentials in the named profile. Default: CLAU_PROFILE or default.
+  --browser      Open login URLs in the host browser when the CLI requests it (default).
+  --no-browser   Disable the host browser bridge; copy URLs manually.
+  -h, --help     Show this help and exit.
+EOF
+}
+
+if ! declare -F clau_auth_profile_normalize >/dev/null 2>&1; then
+  echo "❌ Auth profile helper not found: $CONFIG_DIR/auth-profile.sh"
+  exit 1
+fi
+
+HOST_BROWSER=1
+AUTH_PROFILE_RAW="${CLAU_PROFILE:-default}"
+while (($#)); do
+  case "$1" in
+    -h|--help|help)
+      usage
+      exit 0
+      ;;
+    --browser) HOST_BROWSER=1 ;;
+    --no-browser) HOST_BROWSER=0 ;;
+    --profile)
+      shift
+      AUTH_PROFILE_RAW="$(clau_auth_parse_profile_arg "${1:-}")" || exit 1
+      ;;
+    --profile=*)
+      AUTH_PROFILE_RAW="${1#*=}"
+      AUTH_PROFILE_RAW="$(clau_auth_parse_profile_arg "$AUTH_PROFILE_RAW")" || exit 1
+      ;;
+    *)
+      echo "❌ Unknown option: $1"
+      usage
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+AUTH_PROFILE="$(clau_auth_profile_normalize "$AUTH_PROFILE_RAW")"
+VOLUME="$(clau_auth_volume_name "$VOLUME_BASE" "$AUTH_PROFILE")"
+CONTAINER_NAME="clau-gemini-login"
+[[ "$AUTH_PROFILE" != "default" ]] && CONTAINER_NAME="clau-gemini-login-$AUTH_PROFILE"
+
+if ! docker image inspect "$IMAGE" &>/dev/null; then
+  echo "❌ Image chưa có. Chạy: $CONFIG_DIR/install.sh"
+  exit 1
+fi
+
+if [[ "$HOST_BROWSER" -eq 1 ]] && ! declare -F clau_browser_bridge_start >/dev/null 2>&1; then
+  echo "❌ Browser bridge helper not found: $CONFIG_DIR/browser-bridge.sh"
+  exit 1
+fi
+
+docker volume inspect "$VOLUME" &>/dev/null || docker volume create "$VOLUME" >/dev/null
+
+echo "🔐 Gemini login 1 lần. Browser bridge sẽ mở URL bằng browser trên host khi CLI yêu cầu."
+echo "   Profile: $AUTH_PROFILE"
+echo "   Credential sẽ lưu trong Docker volume: $VOLUME"
+
+NETWORK_OPTS=(--network host)
+[[ "$(uname)" == "Darwin" ]] && NETWORK_OPTS=()  # Mac: OAuth thường dùng copy-paste URL
+
+unset GEMINI_API_KEY
+unset GOOGLE_API_KEY
+
+if [[ "$HOST_BROWSER" -eq 1 ]]; then
+  clau_browser_bridge_start "Gemini login" || exit 1
+  trap clau_browser_bridge_stop EXIT
+fi
+
+# Login không cần firewall. Gemini CLI prompts cho auth method on first run
+# (Login with Google, API key, Vertex AI). Để user chọn rồi exit ra.
+DOCKER_RUN_CMD=(
+  docker run -it --rm
+  --name "$CONTAINER_NAME"
+  "${NETWORK_OPTS[@]}"
+  "${CLAU_BROWSER_BRIDGE_DOCKER_ARGS[@]}"
+  "${CLAU_BROWSER_BRIDGE_ENV[@]}"
+  -e GEMINI_API_KEY=
+  -e GOOGLE_API_KEY=
+  -v "$VOLUME:/home/dev/.gemini"
+  "$IMAGE"
+  bash -lc 'export PATH="/host-browser:$PATH"; gemini'
+)
+
+if [[ "$HOST_BROWSER" -eq 1 ]]; then
+  "${DOCKER_RUN_CMD[@]}"
+  exit $?
+fi
+
+exec "${DOCKER_RUN_CMD[@]}"
