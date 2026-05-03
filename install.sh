@@ -11,6 +11,17 @@ DOCKER_BUILDKIT=1 docker build \
   -t claude-base \
   "$SCRIPT_DIR"
 
+# First-time bootstrap: AI CLIs live in the `clau-tools` volume, not the image.
+# If the volume doesn't yet hold a `claude` binary, run clau-update once to
+# populate it. Routine rebuilds (where the volume already has the CLIs) skip
+# this entirely.
+if ! docker run --rm --entrypoint test \
+       -v clau-tools:/opt/clau-tools \
+       claude-base -x /opt/clau-tools/bin/claude; then
+  echo "📦 First-time CLI install into clau-tools volume..."
+  "$SCRIPT_DIR/clau-update"
+fi
+
 # Broker sidecar image (holds API creds outside the Claude container).
 # Build context = repo root so the Dockerfile can COPY init-firewall.sh.
 echo "📦 Build image: clau-broker..."

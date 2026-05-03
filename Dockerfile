@@ -166,25 +166,38 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends sqlite3
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     pip install --break-system-packages yq
+# manim build deps: gcc + Cairo/Pango headers for pycairo/manimpango
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential pkg-config python3-dev \
+        libcairo2-dev libpango1.0-dev
+# manim LaTeX rendering (Tex / MathTex). Slim subset (~1.5 GB) instead of
+# texlive-full (~5 GB); covers latex-base, common math/science packages,
+# Computer Modern fonts, TikZ, and dvisvgm (Manim uses dvi → svg).
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        texlive-latex-base \
+        texlive-latex-extra \
+        texlive-fonts-recommended \
+        texlive-fonts-extra \
+        texlive-science \
+        texlive-pictures \
+        cm-super \
+        dvisvgm
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install --break-system-packages \
+        'manim>=0.18' \
+        'jsonschema>=4' \
+        'sympy>=1.12'
 # ────────────────────────────────────────────────────────────
 
-# ─── AI CLIs (final cached tail; refresh with clau-update) ────
-# Keep these near the end so `clau-update` can cache-bust only this tail instead
-# of rebuilding the whole toolbelt image.
-ARG CLAU_CLI_REFRESH=initial
-
-USER dev
-WORKDIR /home/dev
-RUN echo "clau CLI refresh: ${CLAU_CLI_REFRESH}" \
-    && curl -fsSL https://claude.ai/install.sh | bash
-
-USER root
-RUN echo "clau CLI refresh: ${CLAU_CLI_REFRESH}" \
-    && npm install -g @openai/codex@latest
-
-USER root
-RUN echo "clau CLI refresh: ${CLAU_CLI_REFRESH}" \
-    && npm install -g @google/gemini-cli@latest
+# AI CLIs (claude / codex / gemini) are NOT installed in this image.
+# They live in the persistent `clau-tools` Docker volume mounted at
+# /opt/clau-tools at run time (already first on PATH). Install/refresh
+# them with `clau-update`, which runs an ephemeral container against
+# the volume.
 
 USER root
 WORKDIR /workspace

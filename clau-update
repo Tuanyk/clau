@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE="${CLAU_IMAGE:-claude-base}"
-REFRESH="$(date -u +%Y%m%dT%H%M%SZ)"
+# Volume names match clau:11-13.
+TOOLS_VOLUME="clau-tools"
+NPM_VOLUME="clau-npm"
 
 usage() {
   cat <<'EOF'
 Usage:
   clau-update
 
-Rebuild only the cached main image tail that installs Claude Code, Codex CLI,
-and Gemini CLI. This leaves auth volumes, project data, pip/npm/tool volumes,
-and broker image untouched.
+Refresh Claude Code, OpenAI Codex, and Google Gemini CLI binaries in the
+persistent `clau-tools` Docker volume. Runs an ephemeral container — no
+image rebuild — so toolbelt layers (apt/pip packages, scratchpad) are not
+touched.
 EOF
 }
 
@@ -30,14 +32,30 @@ for arg in "$@"; do
   esac
 done
 
-echo "📦 Updating Claude Code, Codex CLI, and Gemini CLI in image: $IMAGE"
-echo "   Cache bust: $REFRESH"
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "❌ Image '$IMAGE' not found. Run ./install.sh first." >&2
+  exit 1
+fi
 
-DOCKER_BUILDKIT=1 docker build \
-  --build-arg USER_UID="$(id -u)" \
-  --build-arg USER_GID="$(id -g)" \
-  --build-arg CLAU_CLI_REFRESH="$REFRESH" \
-  -t "$IMAGE" \
-  "$SCRIPT_DIR"
+echo "📦 Refreshing AI CLIs in volume: $TOOLS_VOLUME"
 
-echo "✓ Updated $IMAGE (Claude Code, Codex, Gemini). Restart running clau containers to use the new CLIs."
+docker run --rm \
+  -v "$TOOLS_VOLUME:/opt/clau-tools" \
+  -v "$NPM_VOLUME:/home/dev/.npm" \
+  "$IMAGE" \
+  bash -c '
+    set -euo pipefail
+    npm install -g --prefix=/opt/clau-tools @openai/codex@latest
+    npm install -g --prefix=/opt/clau-tools @google/gemini-cli@latest
+    curl -fsSL https://claude.ai/install.sh | bash
+    if [ -x "$HOME/.local/bin/claude" ]; then
+      install -m 0755 "$HOME/.local/bin/claude" /opt/clau-tools/bin/claude
+    elif command -v claude >/dev/null 2>&1; then
+      install -m 0755 "$(command -v claude)" /opt/clau-tools/bin/claude
+    else
+      echo "❌ Claude installer did not produce a claude binary" >&2
+      exit 1
+    fi
+  '
+
+echo "✓ CLIs refreshed in $TOOLS_VOLUME. Restart any running clau containers to pick them up."
