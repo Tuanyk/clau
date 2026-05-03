@@ -221,7 +221,24 @@ The project directory is bind-mounted live into the container, so anything the A
 
 Defaults: keep the **3 most recent** snapshots per project, auto-prune anything **older than 3 days**. The snapshot dir lives outside any bind mount, so a runaway agent inside the container cannot reach it.
 
-Default excludes (reproducible from package files): `node_modules/`, `.venv/`, `venv/`, `__pycache__/`, `*.pyc`, `dist/`, `build/`, `.next/`, `target/`, `.cache/`. Drop a `.clau-snapshot-ignore` file in the project root (gitignore-style, one pattern per line) to add more.
+Default excludes (reproducible from package files): `node_modules/`, `.venv/`, `venv/`, `__pycache__/`, `*.pyc`, `dist/`, `build/`, `.next/`, `target/`, `.cache/`. Drop a `.clau-workspace` file in the project root to skip large local paths from snapshots and/or mount selected paths read-only inside the container:
+
+```text
+# Skip from pre-run snapshots only.
+snapshot-ignore media/
+snapshot-ignore *.mp4
+
+# Protect an existing project path from writes/deletes inside the container.
+readonly data/prod.sqlite
+
+# Both: useful for large databases or generated datasets.
+readonly-ignore data/local.db
+readonly-ignore recordings/
+```
+
+`readonly` paths must already exist, must be relative to the project, and are layered over the normal workspace bind mount as `:ro`. This protects them from writes and deletes inside a fresh `clau` container. If a project container is already running, stop it first so Docker can apply the new mounts.
+
+The older `.clau-snapshot-ignore` file is still supported for snapshot-only excludes, one path/pattern per line.
 
 Snapshots are taken only on a fresh container start — `clau` re-attaching to a running container skips the snapshot.
 

@@ -151,6 +151,10 @@ The project directory is bind-mounted live into the container. Any `.env`,
 `.secrets/`, service-account JSON, SSH key, or other credential stored in the
 workspace can be read by code running in the container.
 
+Project paths marked `readonly` in `.clau-workspace` are protected from
+container-side writes/deletes, but they are still readable. Treat this as an
+accidental-mutation guard, not a secret boundary.
+
 ### Top-Level File Secrets Are Still AI-Visible
 
 Top-level files under:

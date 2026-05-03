@@ -73,6 +73,17 @@ Important env vars:
   CLAU_BROKER_DASHBOARD=1    Publish broker dashboard on 127.0.0.1.
   CLAU_BWRAP_OPTS=0          Keep Docker's default seccomp/AppArmor profiles.
 
+Project workspace config:
+  Create <project>/.clau-workspace:
+    snapshot-ignore media/        Skip large files/dirs from snapshots only.
+    snapshot-ignore *.mp4
+    readonly data/prod.sqlite     Readable in container; writes/deletes blocked.
+    readonly-ignore data/local.db Do both for bulky read-only data.
+
+  Read-only paths must already exist and must be relative to the project.
+  Stop a running clau-<project> container before mount changes take effect.
+  Legacy snapshot-only file: <project>/.clau-snapshot-ignore (one pattern/line).
+
 Auth profiles:
   Existing logins use the default profile:
     claude-auth -> /home/dev/.claude
@@ -214,6 +225,143 @@ HISTORY_VOLUME="clau-history-$PROJECT_NAME"
 echo "📁 Project: $PROJECT_NAME  ($PROJECT_DIR)"
 echo "👤 Auth profile: $AUTH_PROFILE"
 
+# ─── Project workspace config ───────────────────────────────
+# .clau-workspace gives each project one local file for paths that are
+# expensive to snapshot and/or should be read-only inside the container.
+# .clau-snapshot-ignore remains supported for older projects.
+CLAU_WORKSPACE_FILE="$PROJECT_DIR/.clau-workspace"
+CLAU_SNAPSHOT_IGNORE_FILE="$PROJECT_DIR/.clau-snapshot-ignore"
+CLAU_PROJECT_ROOT_REAL="$(realpath "$PROJECT_DIR" 2>/dev/null || printf '%s\n' "$PROJECT_DIR")"
+CLAU_SNAPSHOT_PATTERNS=()
+CLAU_READONLY_PATHS=()
+
+clau_trim_config_line() {
+  printf '%s' "$1" | sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+clau_snapshot_pattern_add_raw() {
+  local pattern="$1"
+  [[ -z "$pattern" ]] && return 0
+  CLAU_SNAPSHOT_PATTERNS+=("$pattern")
+}
+
+clau_snapshot_pattern_add() {
+  local pattern="$1"
+  local without_slash
+
+  pattern="$(clau_trim_config_line "$pattern")"
+  [[ -z "$pattern" || "$pattern" =~ ^# ]] && return 0
+
+  # GNU tar stores entries below "." as ./path. Add both the user's pattern and
+  # a ./-prefixed variant so common gitignore-like relative paths work.
+  clau_snapshot_pattern_add_raw "$pattern"
+  without_slash="${pattern%/}"
+  [[ "$without_slash" != "$pattern" && -n "$without_slash" ]] \
+    && clau_snapshot_pattern_add_raw "$without_slash"
+  if [[ "$pattern" != /* && "$pattern" != ./* ]]; then
+    clau_snapshot_pattern_add_raw "./$pattern"
+    [[ "$without_slash" != "$pattern" && -n "$without_slash" ]] \
+      && clau_snapshot_pattern_add_raw "./$without_slash"
+  fi
+  return 0
+}
+
+clau_readonly_path_add() {
+  local rel="$1"
+  local candidate real parent
+
+  rel="$(clau_trim_config_line "$rel")"
+  [[ -z "$rel" || "$rel" =~ ^# ]] && return 0
+  rel="${rel#./}"
+  rel="${rel%/}"
+  [[ -z "$rel" ]] && rel="."
+
+  if [[ "$rel" == /* ]]; then
+    echo "⚠️  Ignoring absolute readonly path in .clau-workspace: $rel"
+    return 0
+  fi
+
+  candidate="$PROJECT_DIR/$rel"
+  if [[ ! -e "$candidate" ]]; then
+    echo "⚠️  Ignoring missing readonly path in .clau-workspace: $rel"
+    return 0
+  fi
+  if [[ -L "$candidate" ]]; then
+    echo "⚠️  Ignoring symlink readonly path in .clau-workspace: $rel"
+    return 0
+  fi
+
+  real="$(realpath "$candidate" 2>/dev/null || true)"
+  if [[ -z "$real" ]]; then
+    echo "⚠️  Ignoring unreadable readonly path in .clau-workspace: $rel"
+    return 0
+  fi
+  case "$real" in
+    "$CLAU_PROJECT_ROOT_REAL"|"$CLAU_PROJECT_ROOT_REAL"/*) ;;
+    *)
+      echo "⚠️  Ignoring readonly path outside project in .clau-workspace: $rel"
+      return 0
+      ;;
+  esac
+
+  if [[ "$rel" != "." ]]; then
+    parent="$(dirname "$candidate")"
+    if [[ ! -d "$parent" ]]; then
+      echo "⚠️  Ignoring readonly path with missing parent in .clau-workspace: $rel"
+      return 0
+    fi
+  fi
+
+  CLAU_READONLY_PATHS+=("$rel")
+}
+
+clau_load_snapshot_ignore_file() {
+  local file="$1"
+  local raw line
+
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    line="$(clau_trim_config_line "$raw")"
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
+    clau_snapshot_pattern_add "$line"
+  done < "$file"
+}
+
+clau_load_workspace_file() {
+  local raw line directive value
+
+  [[ -f "$CLAU_WORKSPACE_FILE" ]] || return 0
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    line="$(clau_trim_config_line "$raw")"
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
+    directive="${line%%[[:space:]]*}"
+    if [[ "$directive" == "$line" ]]; then
+      echo "⚠️  Ignoring .clau-workspace line without directive: $line"
+      continue
+    fi
+    value="${line#"$directive"}"
+    value="$(clau_trim_config_line "$value")"
+    case "$directive" in
+      snapshot|snapshot-ignore|ignore|exclude)
+        clau_snapshot_pattern_add "$value"
+        ;;
+      readonly|ro)
+        clau_readonly_path_add "$value"
+        ;;
+      readonly-ignore|ro-ignore)
+        clau_readonly_path_add "$value"
+        clau_snapshot_pattern_add "$value"
+        ;;
+      *)
+        echo "⚠️  Unknown .clau-workspace directive: $directive"
+        ;;
+    esac
+  done < "$CLAU_WORKSPACE_FILE"
+}
+
+clau_load_snapshot_ignore_file "$CLAU_SNAPSHOT_IGNORE_FILE"
+clau_load_workspace_file
+
 # ─── Seed CLAUDE.md / AGENTS.md ─────────────────────────────
 # Dùng marker <!-- clau:seed-vN --> để phát hiện "đã seed":
 #   - File chưa có      → copy nguyên template
@@ -308,14 +456,11 @@ clau_snapshot() {
     '--exclude=./.clau-restored-*'
   )
 
-  # Per-project additions via .clau-snapshot-ignore (gitignore-style, one pattern/line).
-  local extra="$PROJECT_DIR/.clau-snapshot-ignore"
-  if [[ -f "$extra" ]]; then
-    while IFS= read -r line; do
-      [[ -z "$line" || "$line" =~ ^# ]] && continue
-      excludes+=(--exclude="$line")
-    done < "$extra"
-  fi
+  # Per-project additions via .clau-workspace and .clau-snapshot-ignore.
+  local pattern
+  for pattern in "${CLAU_SNAPSHOT_PATTERNS[@]}"; do
+    excludes+=(--exclude="$pattern")
+  done
 
   # --ignore-failed-read: skip files we can't read (e.g. mysql/postgres data dirs
   # owned by container UIDs) and keep the snapshot. Unreadable files aren't
@@ -616,6 +761,16 @@ MOUNTS=(
   -v "$NPM_VOLUME:/home/dev/.npm"
   -v "$TOOLS_VOLUME:/opt/clau-tools"
 )
+if (( ${#CLAU_READONLY_PATHS[@]} > 0 )); then
+  for rel in "${CLAU_READONLY_PATHS[@]}"; do
+    if [[ "$rel" == "." ]]; then
+      MOUNTS+=(-v "$PROJECT_DIR:$PROJECT_DIR:ro")
+    else
+      MOUNTS+=(-v "$PROJECT_DIR/$rel:$PROJECT_DIR/$rel:ro")
+    fi
+  done
+  echo "🔒 Read-only project paths: ${CLAU_READONLY_PATHS[*]}"
+fi
 if [[ "${CLAU_WITHOUT_AUTH:-0}" == "1" ]]; then
   echo "🔐 Auth volumes: not mounted (CLAU_WITHOUT_AUTH=1)"
 elif [[ "$RUN_CODEX" -eq 1 ]]; then
